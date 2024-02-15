@@ -1,11 +1,26 @@
+/*
+ * Copyright (C) 2024. Genome Research Ltd. All rights reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License,
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package server
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/cyverse/go-irodsclient/irods/util"
-	logs "github.com/wtsi-npg/logshim"
 	"io"
 	"net"
 	"net/http"
@@ -16,7 +31,10 @@ import (
 
 	"github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/irods/types"
+	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/cyverse/go-irodsclient/utils/icommands"
+
+	logs "github.com/wtsi-npg/logshim"
 )
 
 const AppName = "sqrrl"
@@ -124,7 +142,8 @@ func writeResponse(writer http.ResponseWriter, message string) {
 	}
 }
 
-func getFileRange(writer http.ResponseWriter, request *http.Request, account *types.IRODSAccount, path string) {
+func getFileRange(writer http.ResponseWriter, request *http.Request,
+	account *types.IRODSAccount, path string) {
 	filesystem, err := makeIRODSFileSystem(account)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
@@ -149,7 +168,8 @@ func getFileRange(writer http.ResponseWriter, request *http.Request, account *ty
 
 	defer func(fh *fs.FileHandle) {
 		if err := fh.Close(); err != nil {
-			logs.GetLogger().Err(err).Str("path", path).Msg("failed to close file handle")
+			logs.GetLogger().Err(err).Str("path", path).
+				Msg("failed to close file handle")
 		}
 	}(fh)
 
@@ -173,7 +193,7 @@ func handleGet(account *types.IRODSAccount) http.HandlerFunc {
 
 func handleRoot(writer http.ResponseWriter, request *http.Request) {
 	writer.WriteHeader(http.StatusOK)
-	writeResponse(writer, "Hello\n")
+	writeResponse(writer, "Sqyrrl is running\n")
 }
 
 type Params struct {

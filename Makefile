@@ -1,17 +1,23 @@
 VERSION := $(shell git describe --always --tags --dirty)
-ldflags := "-X github.com/kjsanger/sqyrrl/internal.Version=${VERSION}"
-build_path = "build/sqyrrl-${VERSION}"
+ldflags := "-X sqyrrl/internal.Version=${VERSION}"
 
-.PHONY: build coverage install lint test check clean
+.PHONY: build build-linux build-darwin build-windows check clean coverage go-install lint test
 
 all: build
 
-install:
-	go install -ldflags ${ldflags}
+build: build-linux
 
-build:
+build-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -v -ldflags ${ldflags} -o sqyrrl-linux-amd64 ./cmd/sqyrrl.go
+
+build-darwin:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -a -v -ldflags ${ldflags} -o sqyrrl-darwin-amd64 ./cmd/sqyrrl.go
+
+build-windows:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -a -v -ldflags ${ldflags} -o sqyrrl-windows-amd64.exe ./cmd/sqyrrl.go
+
+go-install:
+	go install -ldflags ${ldflags}
 
 lint:
 	golangci-lint run ./...

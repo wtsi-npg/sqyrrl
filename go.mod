@@ -1,6 +1,6 @@
 module sqyrrl
 
-go 1.21
+go 1.22
 
 require (
 	github.com/cyverse/go-irodsclient v0.13.2
