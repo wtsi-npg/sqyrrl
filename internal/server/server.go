@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -136,7 +137,10 @@ func makeIRODSFileSystem(account *types.IRODSAccount) (*fs.FileSystem, error) {
 }
 
 func writeResponse(writer http.ResponseWriter, message string) {
-	if _, err := io.WriteString(writer, message); err != nil {
+	// The message may contain an "iRODS path" submitted by the user, which can be an
+	// arbitrary string. Escape it to prevent XSS attacks.
+	sanitisedMessage := html.EscapeString(message)
+	if _, err := io.WriteString(writer, sanitisedMessage); err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		logs.GetLogger().Err(err).Msg("error writing response")
 	}
