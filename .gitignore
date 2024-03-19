@@ -1,0 +1,13 @@
+# Local environment
+.env
+
+# Certificates and keys
+*.crt
+*.key
+
+# IntelliJ / GoLand
+.idea/
+
+# Local outputs
+sqyrrl-*
+*.log

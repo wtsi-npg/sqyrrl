@@ -1,18 +1,25 @@
-FROM golang:1.21.5
+FROM golang:1.22
+
+ARG VERSION=dev
 
 WORKDIR /app
 
 COPY go.mod go.sum ./
+COPY ./cmd ./cmd
+COPY ./internal ./internal
+COPY ./templates ./templates
 
 RUN go mod download
+RUN ls -la  /app/templates
 
-COPY *.go account.yml lorem.txt ./
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o /app/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -a -v -ldflags "-X sqyrrl/internal.Version=${VERSION}" -o sqyrrl ./cmd/sqyrrl.go
 
 FROM scratch
 COPY --from=0 /app /app
 
+WORKDIR /app
+
 EXPOSE 3333
 
-CMD ["/app/server"]
+ENTRYPOINT ["/app/sqyrrl"]
