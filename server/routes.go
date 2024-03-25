@@ -29,11 +29,11 @@ const HTTPParamPath = "path"
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 	logRequests := addRequestLogger(server.logger)
 	correlate := addCorrelationID(server.logger)
-	getter := handleIRODSGet(server.logger, server.account)
-
-	// The home page is currently a placeholder static page showing the version
-	mux.Handle("/", correlate(logRequests(handleHomePage(server.logger))))
+	getter := HandleIRODSGet(server.logger, server.account)
 
 	// The /get endpoint is used to retrieve files from iRODS
 	mux.Handle("/get", correlate(logRequests(getter)))
+
+	// The home page is currently a placeholder static page showing the version
+	mux.Handle("/", correlate(logRequests(HandleHomePage(server.logger))))
 }

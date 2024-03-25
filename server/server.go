@@ -20,36 +20,25 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/cyverse/go-irodsclient/irods/util"
 	"html/template"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
+	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/rs/xid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
-
-	"sqyrrl/internal"
 )
-
-var (
-	tpl             *template.Template
-	userInputPolicy *bluemonday.Policy
-)
-
-func init() {
-	tpl = template.Must(template.ParseGlob("templates/*"))
-	userInputPolicy = bluemonday.StrictPolicy()
-}
 
 type ContextKey string
 
@@ -58,21 +47,17 @@ type ContextKey string
 // some way, and then call the next handler. Ideally, the functionality of each handler
 // should be orthogonal to the others.
 //
-// This is sometimes called "middleware" in Go. I don't use that term because it already
-// has an established meaning in the context of operating systems and networking:
-// https://en.wikipedia.org/wiki/Middleware
+// This is sometimes called "middleware" in Go. I haven't used that term here because it
+// already has an established meaning in the context of operating systems and networking.
 type HandlerChain func(http.Handler) http.Handler
-
-const AppName = "sqyrrl"
-
-const correlationIDKey = ContextKey("correlation_id")
 
 // SqyrrlServer is an HTTP server which contains an embedded iRODS client.
 type SqyrrlServer struct {
 	http.Server
-	context context.Context     // Context for clean shutdown
-	logger  zerolog.Logger      // Base logger from which the server creates its own subloggers
-	account *types.IRODSAccount // iRODS account for the embedded client
+	context context.Context                        // Context for clean shutdown
+	logger  zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
+	manager *icommands.ICommandsEnvironmentManager // iRODS manager for the embedded client
+	account *types.IRODSAccount                    // iRODS account for the embedded client
 }
 
 type Config struct {
@@ -83,6 +68,29 @@ type Config struct {
 	KeyFilePath  string
 }
 
+const AppName = "sqyrrl"
+
+const correlationIDKey = ContextKey("correlation_id")
+
+var userInputPolicy = bluemonday.StrictPolicy()
+
+var (
+	compileOnce sync.Once
+	templates   *template.Template
+)
+
+// GetTemplates returns the HTML templates for the server.
+//
+// This exists to allow the tests to load the templates more easily from the context of
+// the test subdirectory. By calling this function once in test suite setup to load the
+// templates, none of the tests need to worry about the template loading.
+func GetTemplates() *template.Template {
+	compileOnce.Do(func() {
+		templates = template.Must(template.ParseGlob("templates/*"))
+	})
+	return templates
+}
+
 // NewSqyrrlServer creates a new SqyrrlServer instance.
 //
 // This constructor sets up an iRODS account and configures routing for the server.
@@ -90,11 +98,8 @@ type Config struct {
 // start it. To stop the server, send SIGINT or SIGTERM to the process to trigger a
 // graceful shutdown.
 //
-// Arguments:
-//
-//	logger: A zerolog logger instance. Normally this should be the root logger of the
-//	        application. The server will create sub-loggers for its components.
-//	config: Configuration for the server.
+// The logger should be the root logger of the application. The server will create
+// sub-loggers for its components.
 func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error) {
 	if config.Host == "" {
 		return nil, errors.New("missing host")
@@ -107,7 +112,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 			errors.New("missing certificate file path")
 	}
 
-	// The sub-logger adds "hostname and" "component" field to the log entries. Further
+	// The sub-suiteLogger adds "hostname and" "component" field to the log entries. Further
 	// fields are added by other components e.g. in the HTTP handlers.
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -118,15 +123,29 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 		Str("hostname", hostname).
 		Str("component", "server").Logger()
 
-	addr := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
-	mux := http.NewServeMux()
-	account, err := getIRODSAccount(sublogger, config.EnvFilePath)
+	manager, err := NewICommandsEnvironmentManager()
+	if err != nil {
+		logger.Err(err).Msg("failed to create an iRODS environment manager")
+		return nil, err
+	}
+
+	if err := manager.SetEnvironmentFilePath(config.EnvFilePath); err != nil {
+		sublogger.Err(err).
+			Str("path", config.EnvFilePath).
+			Msg("Failed to set the iRODS environment file path")
+		return nil, err
+	}
+
+	account, err := NewIRODSAccount(sublogger, manager)
 	if err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")
 		return nil, err
 	}
 
+	addr := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
+	mux := http.NewServeMux()
 	serverCtx, cancelServer := context.WithCancel(context.Background())
+
 	server := &SqyrrlServer{
 		http.Server{
 			Addr:    addr,
@@ -136,6 +155,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 			}},
 		serverCtx,
 		sublogger,
+		manager,
 		account,
 	}
 
@@ -143,6 +163,14 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 	server.addRoutes(mux)
 
 	return server, nil
+}
+
+func (server *SqyrrlServer) IRODSEnvFilePath() string {
+	return server.manager.GetEnvironmentFilePath()
+}
+
+func (server *SqyrrlServer) IRODSAuthFilePath() string {
+	return server.manager.GetPasswordFilePath()
 }
 
 func (server *SqyrrlServer) Start(certFile string, keyFile string) {
@@ -240,7 +268,7 @@ func (server *SqyrrlServer) waitAndShutdown() {
 	logger.Info().Msg("Server shutdown cleanly")
 }
 
-// addRequestLogger adds an HTTP request logger to the handler chain.
+// addRequestLogger adds an HTTP request suiteLogger to the handler chain.
 //
 // If a correlation ID is present in the request context, it is logged.
 func addRequestLogger(logger zerolog.Logger) HandlerChain {
@@ -269,6 +297,8 @@ func addRequestLogger(logger zerolog.Logger) HandlerChain {
 	}
 }
 
+// Check the "Accept" header
+
 // addCorrelationID adds a correlation ID to the request context and response headers.
 func addCorrelationID(logger zerolog.Logger) HandlerChain {
 	return func(next http.Handler) http.Handler {
@@ -294,61 +324,19 @@ func addCorrelationID(logger zerolog.Logger) HandlerChain {
 	}
 }
 
-// handleHomePage is a handler for the static home page.
-func handleHomePage(logger zerolog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger.Trace().Msg("HomeHandler called")
-
-		type customData struct {
-			Version string
-		}
-
-		data := customData{Version: internal.Version}
-
-		tplName := "home.gohtml"
-		if err := tpl.ExecuteTemplate(w, tplName, data); err != nil {
-			logger.Err(err).
-				Str("tplName", tplName).
-				Msg("Failed to execute HTML template")
-		}
-	})
-}
-
-func handleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger.Trace().Msg("iRODS get handler called")
-
-		if !r.URL.Query().Has(HTTPParamPath) {
-			w.WriteHeader(http.StatusBadRequest)
-			writeResponse(w, fmt.Sprintf("Error: '%s' parameter is missing\n",
-				HTTPParamPath))
-			return
-		}
-
-		var corrID string
-		if val := r.Context().Value(correlationIDKey); val != nil {
-			corrID = val.(string)
-		}
-
-		dirtyPath := r.URL.Query().Get(HTTPParamPath)
-		cleanPath := userInputPolicy.Sanitize(dirtyPath)
-		if cleanPath != dirtyPath {
-			logger.Warn().
-				Str("correlation_id", corrID).
-				Str("clean_path", cleanPath).
-				Str("dirty_path", dirtyPath).
-				Msg("Path was sanitised")
-		}
-
-		rodsLogger := logger.With().
-			Str("correlation_id", corrID).
-			Str("irods", "get").Logger()
-		getFileRange(rodsLogger, w, r, account, cleanPath)
-	})
-}
-
-func writeResponse(writer http.ResponseWriter, message string) {
-	if _, err := io.WriteString(writer, message); err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
+func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int, message ...string) {
+	var msg string
+	if len(message) > 1 {
+		msg = strings.Join(message, " ")
 	}
+	if msg == "" {
+		msg = http.StatusText(code)
+	}
+
+	logger.Trace().
+		Int("code", code).
+		Str("msg", msg).
+		Msg("Sending HTTP error")
+
+	http.Error(w, msg, code)
 }
