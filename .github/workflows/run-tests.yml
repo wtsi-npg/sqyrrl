@@ -1,0 +1,79 @@
+name: "Unit tests"
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }} # Experimental builds may fail
+
+    defaults:
+      run:
+        shell: bash -l -e -o pipefail {0}
+
+    strategy:
+      matrix:
+        include:
+          - irods: "4.2.7"
+            server_image: "ghcr.io/wtsi-npg/ub-16.04-irods-4.2.7:latest"
+            experimental: false
+          - irods: "4.2.11"
+            server_image: "ghcr.io/wtsi-npg/ub-18.04-irods-4.2.11:latest"
+            experimental: false
+          - irods: "4.2.12"
+            server_image: "ghcr.io/wtsi-npg/ub-18.04-irods-4.2.12:latest"
+            experimental: false
+          - irods: "4.3.1"
+            server_image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3.1:latest"
+            experimental: false
+          - irods: "4.3.0"
+            server_image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3-nightly:latest"
+            experimental: true
+
+    services:
+      irods-server:
+        image: ${{ matrix.server_image }}
+        ports:
+          - "1247:1247"
+          - "20000-20199:20000-20199"
+        volumes:
+          - /dev/shm:/dev/shm
+        options: >-
+          --health-cmd "nc -z -v localhost 1247"
+          --health-start-period 60s
+          --health-interval 10s
+          --health-timeout 20s
+          --health-retries 6
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: "Set up Go"
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: "go.mod"
+        cache: true
+
+    - name: "Install test runner"
+      run: |
+        go install -mod=mod github.com/onsi/ginkgo/v2/ginkgo
+        go get github.com/onsi/gomega/...
+
+    - name: "Configure iRODS clients"
+      run: |
+        mkdir -p "$HOME/.irods"
+        cat <<'EOF' > "$HOME/.irods/irods_environment.json"
+        {
+            "irods_host": "localhost",
+            "irods_port": 1247,
+            "irods_user_name": "irods",
+            "irods_zone_name": "testZone",
+            "irods_home": "/testZone/home/irods",
+            "irods_default_resource": "replResc",
+            "irods_default_hash_scheme": "MD5"
+        }
+        EOF
+
+    - name: "Run tests"
+      run: |
+        make test

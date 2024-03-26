@@ -15,7 +15,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package internal
+package server
 
 // Version is the version string for the sqyrrl application. It is obtained from git
 // tags and set at build time. It is printed by the --version CLI flag.

@@ -1,9 +1,9 @@
 VERSION := $(shell git describe --always --tags --dirty)
 ldflags := "-X sqyrrl/internal.Version=${VERSION}"
-build_args := -race -a -v -ldflags ${ldflags}
+build_args := -a -v -ldflags ${ldflags}
 
 
-.PHONY: build build-linux build-darwin build-windows check clean coverage go-install lint test
+.PHONY: build build-linux build-darwin build-windows check clean coverage install lint test
 
 all: build
 
@@ -18,7 +18,7 @@ build-darwin:
 build-windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ${build_args} -o sqyrrl-windows-amd64.exe ./cmd/sqyrrl.go
 
-go-install:
+install:
 	go install -ldflags ${ldflags}
 
 lint:

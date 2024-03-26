@@ -29,10 +29,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	logrus "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 
-	"sqyrrl/internal"
-	"sqyrrl/internal/server"
+	"sqyrrl/server"
 )
 
 var mainLogger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -90,7 +89,7 @@ func configureRootLogger(flags *cliFlags) zerolog.Logger {
 	return zerolog.New(zerolog.SyncWriter(writer)).With().
 		Timestamp().
 		Str("app", server.AppName).
-		Str("version", internal.Version).
+		Str("version", server.Version).
 		Int("pid", os.Getpid()).
 		Logger().Level(level)
 }
@@ -139,7 +138,7 @@ func main() {
 		Short:            "Sqyrrl.",
 		PersistentPreRun: checkLogLevelValue,
 		Run:              printHelp,
-		Version:          internal.Version,
+		Version:          server.Version,
 	}
 	rootCmd.PersistentFlags().StringVar(&cliFlagsSelected.level,
 		"log-level", "info",
@@ -165,7 +164,7 @@ func main() {
 		"key-file", "",
 		"Path to the SSL private key file")
 	startCmd.Flags().StringVar(&cliFlagsSelected.envFilePath,
-		"irods-env", server.GetIRODSEnvFilePath(),
+		"irods-env", server.IRODSEnvFilePath(),
 		"Path to the iRODS environment file")
 
 	rootCmd.AddCommand(startCmd)
