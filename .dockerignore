@@ -1,9 +1,11 @@
+.idea/**
 .git/**
 tests/**
 
-.dockerignore
-.gitignore
 .DS_Store
+.dockerignore
+.env
+.gitignore
 
 Dockerfile
 docker-compose.yml

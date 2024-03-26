@@ -21,248 +21,334 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
+	"github.com/cyverse/go-irodsclient/irods/util"
+	"html/template"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/irods/types"
-	"github.com/cyverse/go-irodsclient/irods/util"
-	"github.com/cyverse/go-irodsclient/utils/icommands"
+	"github.com/microcosm-cc/bluemonday"
+	"github.com/rs/xid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 
-	logs "github.com/wtsi-npg/logshim"
+	"sqyrrl/internal"
 )
 
-const AppName = "sqrrl"
+var (
+	tpl             *template.Template
+	userInputPolicy *bluemonday.Policy
+)
 
-// setupSignalHandler sets up a signal handler to cancel the context when a
-// SIGINT or SIGTERM is received.
-func setupSignalHandler(cancel context.CancelFunc) {
-	log := logs.GetLogger()
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		s := <-signals
-
-		switch s {
-		case syscall.SIGINT:
-			log.Info().Msg("server got SIGINT, shutting down")
-			cancel()
-		case syscall.SIGTERM:
-			log.Info().Msg("server got SIGTERM, shutting down")
-			cancel()
-		default:
-			log.Error().Str("signal", s.String()).
-				Msg("got unexpected signal, exiting")
-			os.Exit(1)
-		}
-	}()
+func init() {
+	tpl = template.Must(template.ParseGlob("templates/*"))
+	userInputPolicy = bluemonday.StrictPolicy()
 }
 
-// getIRODSAccount returns an iRODS account instance using the iRODS environment for
-// configuration. The environment file path is given by envFilePath. If the file
-// is not readable, an error is returned.
-func getIRODSAccount(envFilePath string) (*types.IRODSAccount, error) {
-	log := logs.GetLogger()
+type ContextKey string
 
-	// At this point envFilePath is known to be non-empty
+// HandlerChain is a function that takes an http.Handler and returns an new http.Handler
+// wrapping the input handler. Each handler in the chain should process the request in
+// some way, and then call the next handler. Ideally, the functionality of each handler
+// should be orthogonal to the others.
+//
+// This is sometimes called "middleware" in Go. I don't use that term because it already
+// has an established meaning in the context of operating systems and networking:
+// https://en.wikipedia.org/wiki/Middleware
+type HandlerChain func(http.Handler) http.Handler
 
-	mgr, err := icommands.CreateIcommandsEnvironmentManager()
+const AppName = "sqyrrl"
+
+const correlationIDKey = ContextKey("correlation_id")
+
+// SqyrrlServer is an HTTP server which contains an embedded iRODS client.
+type SqyrrlServer struct {
+	http.Server
+	context context.Context     // Context for clean shutdown
+	logger  zerolog.Logger      // Base logger from which the server creates its own subloggers
+	account *types.IRODSAccount // iRODS account for the embedded client
+}
+
+type Config struct {
+	Host         string
+	Port         int
+	EnvFilePath  string // Path to the iRODS environment file
+	CertFilePath string
+	KeyFilePath  string
+}
+
+// NewSqyrrlServer creates a new SqyrrlServer instance.
+//
+// This constructor sets up an iRODS account and configures routing for the server.
+// The server is not started by this function. Call Start() on the returned server to
+// start it. To stop the server, send SIGINT or SIGTERM to the process to trigger a
+// graceful shutdown.
+//
+// Arguments:
+//
+//	logger: A zerolog logger instance. Normally this should be the root logger of the
+//	        application. The server will create sub-loggers for its components.
+//	config: Configuration for the server.
+func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error) {
+	if config.Host == "" {
+		return nil, errors.New("missing host")
+	}
+	if config.Port == 0 {
+		return nil, errors.New("missing port")
+	}
+	if config.CertFilePath == "" {
+		return nil,
+			errors.New("missing certificate file path")
+	}
+
+	// The sub-logger adds "hostname and" "component" field to the log entries. Further
+	// fields are added by other components e.g. in the HTTP handlers.
+	hostname, err := os.Hostname()
 	if err != nil {
-		log.Err(err).Msg("failed to create an iRODS environment manager")
 		return nil, err
 	}
 
-	// mgr.Load below will succeed even if the iRODS environment file does not exist,
-	// but we absolutely don't want that behaviour here.
-	fileInfo, err := os.Stat(envFilePath)
-	if os.IsNotExist(err) {
-		log.Err(err).Str("path", envFilePath).
-			Msg("iRODS environment file does not exist")
-		return nil, err
-	}
-	if fileInfo.IsDir() {
-		ferr := errors.New("iRODS environment file is a directory")
-		log.Err(ferr).Str("path", envFilePath).
-			Msg("iRODS environment file is a directory")
-		return nil, ferr
-	}
+	sublogger := logger.With().
+		Str("hostname", hostname).
+		Str("component", "server").Logger()
 
-	if err := mgr.SetEnvironmentFilePath(envFilePath); err != nil {
-		log.Err(err).
-			Str("path", envFilePath).
-			Msg("failed to set the iRODS environment file path")
-		return nil, err
-	}
-
-	if err := mgr.Load(os.Getpid()); err != nil {
-		log.Err(err).
-			Msg("the iRODS environment manager failed to load an environment")
-		return nil, err
-	}
-
-	log.Info().Str("path", mgr.GetEnvironmentFilePath()).
-		Msg("loaded iRODS environment file")
-
-	account, err := mgr.ToIRODSAccount()
-	if err != nil {
-		log.Err(err).Msg("failed to obtain an iRODS account instance")
-		return nil, err
-	}
-
-	log.Info().Str("host", account.Host).
-		Int("port", account.Port).
-		Str("zone", account.ClientZone).
-		Str("user", account.ClientUser).
-		Str("auth_scheme", string(account.AuthenticationScheme)).
-		Msg("iRODS account obtained")
-
-	return account, nil
-}
-
-func makeIRODSFileSystem(account *types.IRODSAccount) (*fs.FileSystem, error) {
-	filesystem, err := fs.NewFileSystemWithDefault(account, AppName)
-	if err != nil {
-		logs.GetLogger().Err(err).Msg("failed to create an iRODS file system")
-		return nil, err
-	}
-
-	return filesystem, nil
-}
-
-func writeResponse(writer http.ResponseWriter, message string) {
-	// The message may contain an "iRODS path" submitted by the user, which can be an
-	// arbitrary string. Escape it to prevent XSS attacks.
-	sanitisedMessage := html.EscapeString(message)
-	if _, err := io.WriteString(writer, sanitisedMessage); err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
-		logs.GetLogger().Err(err).Msg("error writing response")
-	}
-}
-
-func getFileRange(writer http.ResponseWriter, request *http.Request,
-	account *types.IRODSAccount, path string) {
-	filesystem, err := makeIRODSFileSystem(account)
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		writeResponse(writer, "Error: iRODS access failed\n")
-		return
-	}
-
-	defer filesystem.Release()
-
-	if !filesystem.ExistsFile(path) {
-		writer.WriteHeader(http.StatusNotFound)
-		writeResponse(writer, fmt.Sprintf("Error: path not found '%s'\n", path))
-		return
-	}
-
-	fh, err := filesystem.OpenFile(path, "", "r")
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		writeResponse(writer, fmt.Sprintf("Error: failed to open '%s'\n", path))
-		return
-	}
-
-	defer func(fh *fs.FileHandle) {
-		if err := fh.Close(); err != nil {
-			logs.GetLogger().Err(err).Str("path", path).
-				Msg("failed to close file handle")
-		}
-	}(fh)
-
-	http.ServeContent(writer, request, path, time.Now(), fh)
-}
-
-func handleGet(account *types.IRODSAccount) http.HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		if !request.URL.Query().Has("path") {
-			writer.WriteHeader(http.StatusBadRequest)
-			writeResponse(writer, "Error: path parameter is missing\n")
-			return
-		}
-
-		path := request.URL.Query().Get("path")
-		logs.GetLogger().Info().Str("path", path).Msg("requested file")
-
-		getFileRange(writer, request, account, path)
-	}
-}
-
-func handleRoot(writer http.ResponseWriter, request *http.Request) {
-	writer.WriteHeader(http.StatusOK)
-	writeResponse(writer, "Sqyrrl is running\n")
-}
-
-type Params struct {
-	Addr        string // Address to listen on
-	EnvFilePath string // Path to the iRODS environment file
-}
-
-func Start(params Params) {
-	log := logs.GetLogger()
-
-	if params.Addr == "" {
-		log.Error().Msg("missing address to listen on")
-		return
-	}
-	if params.EnvFilePath == "" {
-		log.Error().Msg("missing iRODS environment file path")
-		return
-	}
-
-	envFilePath, err := util.ExpandHomeDir(params.EnvFilePath)
-	if err != nil {
-		log.Err(err).Str("path", params.EnvFilePath).
-			Msg("failed to expand the iRODS environment file path")
-		return
-	}
-
-	account, err := getIRODSAccount(envFilePath)
-	if err != nil {
-		log.Err(err).Msg("failed to get an iRODS account")
-		return
-	}
-
+	addr := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleRoot)
-	mux.HandleFunc("/get", handleGet(account))
+	account, err := getIRODSAccount(sublogger, config.EnvFilePath)
+	if err != nil {
+		logger.Err(err).Msg("Failed to get an iRODS account")
+		return nil, err
+	}
 
 	serverCtx, cancelServer := context.WithCancel(context.Background())
-	setupSignalHandler(cancelServer)
+	server := &SqyrrlServer{
+		http.Server{
+			Addr:    addr,
+			Handler: mux,
+			BaseContext: func(listener net.Listener) context.Context {
+				return serverCtx
+			}},
+		serverCtx,
+		sublogger,
+		account,
+	}
 
-	server := &http.Server{Addr: params.Addr, Handler: mux,
-		BaseContext: func(listener net.Listener) context.Context {
-			return serverCtx
-		}}
+	server.setUpSignalHandler(cancelServer)
+	server.addRoutes(mux)
 
+	return server, nil
+}
+
+func (server *SqyrrlServer) Start(certFile string, keyFile string) {
 	go func() {
-		serr := server.ListenAndServe()
-		log.Info().Msg("server stopped listening")
+		logger := server.logger
 
-		if serr != nil {
+		err := server.ListenAndServeTLS(certFile, keyFile)
+
+		logger.Info().Msg("Server stopped listening")
+		if err != nil {
 			switch {
-			case errors.Is(serr, http.ErrServerClosed):
-				log.Info().Msg("server closed cleanly")
+			case errors.Is(err, http.ErrServerClosed):
+				logger.Info().Msg("Server closed cleanly")
 			default:
-				log.Err(serr).Msg("server closed with an error")
+				logger.Err(err).Msg("Server closed with an error")
 			}
 		}
 	}()
+	<-server.context.Done()
 
-	<-serverCtx.Done()
+	server.waitAndShutdown()
+}
+
+func ConfigureAndStart(logger zerolog.Logger, config Config) {
+	if config.Host == "" {
+		logger.Error().Msg("Missing host component of address to listen on")
+		return
+	}
+	if config.Port == 0 {
+		logger.Error().Msg("Missing port component of address to listen on")
+		return
+	}
+	if config.CertFilePath == "" {
+		logger.Error().Msg("Missing certificate file path")
+		return
+	}
+	if config.KeyFilePath == "" {
+		logger.Error().Msg("Missing key file path")
+		return
+	}
+	if config.EnvFilePath == "" {
+		logger.Error().Msg("Missing iRODS environment file path")
+		return
+	}
+
+	envFilePath, err := util.ExpandHomeDir(config.EnvFilePath)
+	if err != nil {
+		logger.Err(err).Str("path", config.EnvFilePath).
+			Msg("Failed to expand the iRODS environment file path")
+		return
+	}
+	config.EnvFilePath = envFilePath
+
+	server, err := NewSqyrrlServer(logger, config)
+	if err != nil {
+		logger.Err(err).Msg("Failed to create a server")
+		return
+	}
+
+	server.Start(config.CertFilePath, config.KeyFilePath)
+}
+
+func (server *SqyrrlServer) setUpSignalHandler(cancel context.CancelFunc) {
+	logger := server.logger
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-signals
+
+		switch sig {
+		case syscall.SIGINT, syscall.SIGTERM:
+			logger.Info().
+				Str("signal", sig.String()).
+				Msg("Server shutting down on signal")
+			cancel()
+		default:
+			logger.Warn().
+				Str("signal", sig.String()).
+				Msg("Received signal")
+		}
+	}()
+}
+
+func (server *SqyrrlServer) waitAndShutdown() {
+	logger := server.logger
 
 	timeoutCtx, cancelTimeout := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelTimeout()
 
-	if serr := server.Shutdown(timeoutCtx); serr != nil {
-		log.Err(serr).Msg("error shutting down server")
+	if err := server.Shutdown(timeoutCtx); err != nil {
+		logger.Err(err).Msg("Error shutting down server")
 	}
-	log.Info().Msg("server shutdown cleanly")
+	logger.Info().Msg("Server shutdown cleanly")
+}
+
+// addRequestLogger adds an HTTP request logger to the handler chain.
+//
+// If a correlation ID is present in the request context, it is logged.
+func addRequestLogger(logger zerolog.Logger) HandlerChain {
+	return func(next http.Handler) http.Handler {
+		lh := hlog.NewHandler(logger)
+
+		ah := hlog.AccessHandler(func(r *http.Request, status, size int, dur time.Duration) {
+			var corrID string
+			if val := r.Context().Value(correlationIDKey); val != nil {
+				corrID = val.(string)
+			}
+
+			hlog.FromRequest(r).Info().
+				Str("correlation_id", corrID).
+				Dur("duration", dur).
+				Int("size", size).
+				Int("status", status).
+				Str("method", r.Method).
+				Str("url", r.URL.RequestURI()).
+				Str("remote_addr", r.RemoteAddr).
+				Str("forwarded_for", r.Header.Get(HTTPForwardedFor)).
+				Str("user_agent", r.UserAgent()).
+				Msg("Request served")
+		})
+		return lh(ah(next))
+	}
+}
+
+// addCorrelationID adds a correlation ID to the request context and response headers.
+func addCorrelationID(logger zerolog.Logger) HandlerChain {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var corrID string
+			if corrID = r.Header.Get(HTTPHeaderCorrelationID); corrID == "" {
+				corrID = xid.New().String()
+				logger.Trace().
+					Str("correlation_id", corrID).
+					Str("url", r.URL.RequestURI()).
+					Msg("Creating a new correlation ID")
+				w.Header().Add(HTTPHeaderCorrelationID, corrID)
+			} else {
+				logger.Trace().
+					Str("correlation_id", corrID).
+					Str("url", r.URL.RequestURI()).
+					Msg("Using correlation ID from request")
+			}
+
+			ctx := context.WithValue(r.Context(), correlationIDKey, corrID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// handleHomePage is a handler for the static home page.
+func handleHomePage(logger zerolog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger.Trace().Msg("HomeHandler called")
+
+		type customData struct {
+			Version string
+		}
+
+		data := customData{Version: internal.Version}
+
+		tplName := "home.gohtml"
+		if err := tpl.ExecuteTemplate(w, tplName, data); err != nil {
+			logger.Err(err).
+				Str("tplName", tplName).
+				Msg("Failed to execute HTML template")
+		}
+	})
+}
+
+func handleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger.Trace().Msg("iRODS get handler called")
+
+		if !r.URL.Query().Has(HTTPParamPath) {
+			w.WriteHeader(http.StatusBadRequest)
+			writeResponse(w, fmt.Sprintf("Error: '%s' parameter is missing\n",
+				HTTPParamPath))
+			return
+		}
+
+		var corrID string
+		if val := r.Context().Value(correlationIDKey); val != nil {
+			corrID = val.(string)
+		}
+
+		dirtyPath := r.URL.Query().Get(HTTPParamPath)
+		cleanPath := userInputPolicy.Sanitize(dirtyPath)
+		if cleanPath != dirtyPath {
+			logger.Warn().
+				Str("correlation_id", corrID).
+				Str("clean_path", cleanPath).
+				Str("dirty_path", dirtyPath).
+				Msg("Path was sanitised")
+		}
+
+		rodsLogger := logger.With().
+			Str("correlation_id", corrID).
+			Str("irods", "get").Logger()
+		getFileRange(rodsLogger, w, r, account, cleanPath)
+	})
+}
+
+func writeResponse(writer http.ResponseWriter, message string) {
+	if _, err := io.WriteString(writer, message); err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	}
 }

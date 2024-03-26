@@ -18,47 +18,66 @@
 package main
 
 import (
-	"github.com/rs/zerolog"
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
-	logs "github.com/wtsi-npg/logshim"
-	"github.com/wtsi-npg/logshim-zerolog/zlog"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/pkgerrors"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
+	logrus "github.com/sirupsen/logrus"
 
 	"sqyrrl/internal"
 	"sqyrrl/internal/server"
 )
 
-const defaultIRODSEnvFile = "~/.irods/irods_environment.json"
-const iRODSEnvFileEnvVar = "IRODS_ENVIRONMENT_FILE"
+var mainLogger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr})
 
-type cliLoggingFlags struct {
-	debug   bool // Enable debug logging
-	verbose bool // Enable verbose logging
+type cliFlags struct {
+	certFilePath string // Path to the certificate file
+	envFilePath  string // Path to the iRODS environment file
+	keyFilePath  string // Path to the key file
+
+	host  string // Address to listen on, host part
+	level string // Logging level
+	port  int    // Port to listen on
 }
 
-type httpServerFlags struct {
-	addr        string // Address to listen on
-	envFilePath string // Path to the iRODS environment file
+var cliFlagsSelected = cliFlags{
+	host: "localhost",
 }
 
-var logFlags = cliLoggingFlags{}
-var serverFlags = httpServerFlags{}
+// configureRootLogger configures the root logger for the application. It sets up common
+// fields for the application name, version, and process ID, and sets the default log
+// level.
+//
+// Previously we've created a logger interface to avoid direct dependency on any of the
+// available logging libraries. However, experience has shown that we never actually
+// switch logging libraries, so the interface is not needed. We've used Zerolog for a few
+// years now, and it's been great. Without the interface, we can more easily take
+// advantage of Zerolog's features, particularly support for HTTP request logging.
+func configureRootLogger(flags *cliFlags) zerolog.Logger {
+	var level zerolog.Level
 
-func setupLogger(flags *cliLoggingFlags) logs.Logger {
-	var level logs.Level
-	if flags.debug {
-		level = logs.DebugLevel
-	} else if flags.verbose {
-		level = logs.InfoLevel
-	} else {
-		level = logs.ErrorLevel
+	switch strings.ToLower(flags.level) {
+	case "trace":
+		level = zerolog.TraceLevel
+	case "debug":
+		level = zerolog.DebugLevel
+	case "info":
+		level = zerolog.InfoLevel
+	case "warn":
+		level = zerolog.WarnLevel
+	case "error":
+		level = zerolog.ErrorLevel
+	default:
+		level = zerolog.InfoLevel
 	}
 
-	// Choose a Zerolog logging backend
 	var writer io.Writer
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		writer = zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
@@ -66,70 +85,93 @@ func setupLogger(flags *cliLoggingFlags) logs.Logger {
 		writer = os.Stderr
 	}
 
-	// Synchronize writes to the global logger
-	logger := zlog.New(zerolog.SyncWriter(writer), level)
+	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
-	return logs.InstallLogger(logger)
+	return zerolog.New(zerolog.SyncWriter(writer)).With().
+		Timestamp().
+		Str("app", server.AppName).
+		Str("version", internal.Version).
+		Int("pid", os.Getpid()).
+		Logger().Level(level)
 }
 
-// getIRODSEnvFilePath returns the path to the iRODS environment file. If the path
-// is not set in the environment, the default path is returned.
-func getIRODSEnvFilePath() string {
-	env := os.Getenv(iRODSEnvFileEnvVar)
-	if env == "" {
-		env = defaultIRODSEnvFile
+func checkLogLevelValue(cmd *cobra.Command, args []string) {
+	levelFlag := cliFlagsSelected.level
+	if levelFlag != "" {
+		for _, level := range []string{"trace", "debug", "info", "warn", "error"} {
+			if levelFlag == level {
+				return
+			}
+		}
+		err := fmt.Errorf("invalid log level: '%s'", levelFlag)
+		mainLogger.Err(err).Msg("Invalid log level")
+		os.Exit(1)
 	}
-	return env
 }
 
 func printHelp(cmd *cobra.Command, args []string) {
-	setupLogger(&logFlags)
 	if err := cmd.Help(); err != nil {
-		logs.GetLogger().Error().Err(err).Msg("help command failed")
+		mainLogger.Error().Err(err).Msg("Help command failed")
 		os.Exit(1)
 	}
 }
 
 func startServer(cmd *cobra.Command, args []string) {
-	setupLogger(&logFlags)
-	server.Start(server.Params{
-		Addr:        serverFlags.addr,
-		EnvFilePath: serverFlags.envFilePath,
+	logger := configureRootLogger(&cliFlagsSelected)
+
+	server.ConfigureAndStart(logger, server.Config{
+		Host:         cliFlagsSelected.host,
+		Port:         cliFlagsSelected.port,
+		CertFilePath: cliFlagsSelected.certFilePath,
+		KeyFilePath:  cliFlagsSelected.keyFilePath,
+		EnvFilePath:  cliFlagsSelected.envFilePath,
 	})
 }
 
 func main() {
-	rootCmd := &cobra.Command{
-		Use:     "sqyrrl",
-		Short:   "Sqyrrl.",
-		Run:     printHelp,
-		Version: internal.Version,
-	}
+	// go-irodsclient uses logrus, so set its log level to something appropriate. I did
+	// look at a shim to forward logrus log events to zerolog, in order to manage them
+	// there, but that seemed not to add enough value to justify the work.
+	logrus.SetLevel(logrus.ErrorLevel)
 
-	rootCmd.PersistentFlags().BoolVar(&logFlags.debug, "debug", false,
-		"enable debug output")
-	rootCmd.PersistentFlags().BoolVar(&logFlags.verbose, "verbose", false,
-		"enable verbose output")
+	rootCmd := &cobra.Command{
+		Use:              "sqyrrl",
+		Short:            "Sqyrrl.",
+		PersistentPreRun: checkLogLevelValue,
+		Run:              printHelp,
+		Version:          internal.Version,
+	}
+	rootCmd.PersistentFlags().StringVar(&cliFlagsSelected.level,
+		"log-level", "info",
+		"Set the log level (trace, debug, info, warn, error)")
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 
 	startCmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start the server",
-		Long:  "Start the server.",
+		Short: "Configure and start the server",
+		Long:  "Configure and start the server.",
 		Run:   startServer,
 	}
-
-	startCmd.Flags().StringVar(&serverFlags.addr, "addr", "127.0.0.1:3333",
-		"Address on which to listen")
-	startCmd.Flags().StringVar(&serverFlags.envFilePath, "irods-env",
-		getIRODSEnvFilePath(),
+	startCmd.Flags().StringVar(&cliFlagsSelected.host,
+		"host", "localhost",
+		"Address on which to listen, host part")
+	startCmd.Flags().IntVar(&cliFlagsSelected.port,
+		"port", 3333,
+		"Port on which to listen")
+	startCmd.Flags().StringVar(&cliFlagsSelected.certFilePath,
+		"cert-file", "",
+		"Path to the SSL certificate file")
+	startCmd.Flags().StringVar(&cliFlagsSelected.keyFilePath,
+		"key-file", "",
+		"Path to the SSL private key file")
+	startCmd.Flags().StringVar(&cliFlagsSelected.envFilePath,
+		"irods-env", server.GetIRODSEnvFilePath(),
 		"Path to the iRODS environment file")
 
 	rootCmd.AddCommand(startCmd)
 
 	if err := rootCmd.Execute(); err != nil {
-		setupLogger(&logFlags)
-		logs.GetLogger().Err(err).Msg("command failed")
+		mainLogger.Err(err).Msg("command failed")
 		os.Exit(1)
 	}
 }

@@ -32,7 +32,19 @@ with appropriate authorization. The chosen iRODS user should have access only to
 To start the server, use the following command:
 
 ```sh
-sqyrrl start --addr <address> # Defaults to 127.0.0.1:3333
+Usage:
+  sqyrrl start [flags]
+
+Flags:
+      --cert-file string   Path to the SSL certificate file
+  -h, --help               help for start
+      --host string        Address on which to listen, host part (default "localhost")
+      --irods-env string   Path to the iRODS environment file (default "~/.irods/irods_environment.json")
+      --key-file string    Path to the SSL private key file
+      --port int           Port on which to listen (default 3333)
+
+Global Flags:
+      --log-level string   Set the log level (trace, debug, info, warn, error) (default "info")
 ```
 
 To stop the server, send `SIGINT` or `SIGTERM` to the process. The server will wait for
