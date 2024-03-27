@@ -110,7 +110,7 @@ var _ = Describe("iRODS Get Handler", func() {
 				conn, err = irodsFS.GetIOConnection()
 				Expect(err).NotTo(HaveOccurred())
 
-				err = fs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelRead,
+				err = fs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
 					server.PublicUser, testZone, false)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -125,12 +125,12 @@ var _ = Describe("iRODS Get Handler", func() {
 						Str("zone", ac.UserZone).
 						Str("expected_zone", testZone).
 						Str("access", ac.AccessLevel.ChmodString()).
-						Str("expected_access", types.IRODSAccessLevelRead.ChmodString()).
+						Str("expected_access", types.IRODSAccessLevelReadObject.ChmodString()).
 						Msg("ACL")
 
 					if ac.UserName == server.PublicUser &&
 						ac.UserZone == testZone &&
-						server.LevelsEqual(ac.AccessLevel, types.IRODSAccessLevelRead) {
+						server.LevelsEqual(ac.AccessLevel, types.IRODSAccessLevelReadObject) {
 						publicAccess = true
 					}
 				}

@@ -29,8 +29,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/sirupsen/logrus"
-
 	"sqyrrl/server"
 )
 
@@ -128,11 +126,6 @@ func startServer(cmd *cobra.Command, args []string) {
 }
 
 func main() {
-	// go-irodsclient uses logrus, so set its log level to something appropriate. I did
-	// look at a shim to forward logrus log events to zerolog, in order to manage them
-	// there, but that seemed not to add enough value to justify the work.
-	logrus.SetLevel(logrus.ErrorLevel)
-
 	rootCmd := &cobra.Command{
 		Use:              "sqyrrl",
 		Short:            "Sqyrrl.",
