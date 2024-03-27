@@ -15,7 +15,8 @@ or as a Docker image. Copy the file to the desired location and run it.
 
 Sqyrrl is an early development version and has the following limitations:
 
-- Does not authenticate users to the HTTP endpoint; anyone can access the data it serves
+- Does not authenticate users to the HTTP endpoint; anyone can access the data it serves.
+- Only serves files that have public access in iRODS.
 
 ## Running Sqyrrl
 

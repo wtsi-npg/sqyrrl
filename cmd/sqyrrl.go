@@ -51,7 +51,7 @@ var cliFlagsSelected = cliFlags{
 }
 
 // configureRootLogger configures the root logger for the application. It sets up common
-// fields for the application name, version, and process ID, and sets the default log
+// fields for the application name, version, and process ID, and it sets the default log
 // level.
 //
 // Previously we've created a logger interface to avoid direct dependency on any of the

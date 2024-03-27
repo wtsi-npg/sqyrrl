@@ -82,8 +82,9 @@ var (
 // GetTemplates returns the HTML templates for the server.
 //
 // This exists to allow the tests to load the templates more easily from the context of
-// the test subdirectory. By calling this function once in test suite setup to load the
-// templates, none of the tests need to worry about the template loading.
+// the test subdirectory. This function must be called once in test suite setup,
+// with the working directory set to the root of the project, to load the templates.
+// After that, it may be called freely in any context to access the loaded templates.
 func GetTemplates() *template.Template {
 	compileOnce.Do(func() {
 		templates = template.Must(template.ParseGlob("templates/*"))
