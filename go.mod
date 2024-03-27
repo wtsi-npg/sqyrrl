@@ -9,7 +9,7 @@ require (
 	github.com/onsi/gomega v1.30.0
 	github.com/rs/xid v1.5.0
 	github.com/rs/zerolog v1.32.0
-	github.com/sirupsen/logrus v1.7.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
 	golang.org/x/term v0.18.0
 )
