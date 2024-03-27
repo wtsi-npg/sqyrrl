@@ -57,8 +57,8 @@ var _ = Describe("iRODS Get Handler", func() {
 
 	AfterEach(func() {
 		// Remove the test file from iRODS
-		// err := irodsFS.RemoveDir(workColl, true, true)
-		// Expect(err).NotTo(HaveOccurred())
+		err := irodsFS.RemoveDir(workColl, true, true)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	When("a non-existent path is given", func() {

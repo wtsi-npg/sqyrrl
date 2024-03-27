@@ -58,7 +58,7 @@ func IRODSEnvFilePath() string {
 }
 
 // InitIRODS initialises the iRODS environment by creating a populated auth file if it
-// does not already exist. This avoitds the need to have `iinit` present on the server
+// does not already exist. This avoids the need to have `iinit` present on the server
 // host.
 func InitIRODS(manager *icommands.ICommandsEnvironmentManager, password string) error {
 	authFile := manager.GetPasswordFilePath()
@@ -77,8 +77,7 @@ func NewICommandsEnvironmentManager() (*icommands.ICommandsEnvironmentManager, e
 }
 
 // NewIRODSAccount returns an iRODS account instance using the iRODS environment for
-// configuration. The environment file path is given by envFilePath. If the file
-// is not readable, an error is returned.
+// configuration. The environment file path is obtained from the manager.
 func NewIRODSAccount(logger zerolog.Logger,
 	manager *icommands.ICommandsEnvironmentManager) (*types.IRODSAccount, error) {
 	// manager.Load() below will succeed even if the iRODS environment file does not
