@@ -169,7 +169,7 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 
 		if effectiveUserZone == pathZone &&
 			ac.UserName == PublicUser &&
-			LevelsEqual(ac.AccessLevel, types.IRODSAccessLevelRead) {
+			LevelsEqual(ac.AccessLevel, types.IRODSAccessLevelReadObject) {
 			logger.Trace().
 				Str("path", path).
 				Msg("Public read access found")
@@ -196,11 +196,28 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 
 	defer filesystem.Release()
 
-	if !filesystem.ExistsFile(path) {
-		logger.Info().
-			Str("path", path).
-			Msg("Requested path does not exist")
-		http.NotFound(w, r)
+	// Don't use filesystem.ExistsFile(path) here because it will return false if the
+	// file _does_ exist on the iRODS server, but the server is down or unreachable.
+	//
+	// filesystem.StatFile(path) is better because we can check for the error type.
+	_, err = filesystem.StatFile(path)
+	if err != nil {
+		if types.IsAuthError(err) {
+			logger.Err(err).
+				Str("path", path).
+				Msg("Failed to authenticate with iRODS")
+			writeErrorResponse(logger, w, http.StatusUnauthorized)
+			return
+		}
+		if types.IsFileNotFoundError(err) {
+			logger.Info().
+				Str("path", path).
+				Msg("Requested path does not exist")
+			writeErrorResponse(logger, w, http.StatusNotFound)
+			return
+		}
+		logger.Err(err).Str("path", path).Msg("Failed to stat file")
+		writeErrorResponse(logger, w, http.StatusInternalServerError)
 		return
 	}
 
