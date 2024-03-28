@@ -44,6 +44,13 @@ jobs:
           echo 'GIT_URL='$(git remote get-url origin) >> $GITHUB_ENV
           echo 'GIT_COMMIT='$(git log --pretty=format:'%H' -n 1) >> $GITHUB_ENV
 
+      - name: "build executables"
+        run: |
+          make build
+          for f in sqyrrl-*; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
       - name: "Create Release"
         uses: ncipollo/release-action@v1.14.0
         with:
