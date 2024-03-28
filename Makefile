@@ -1,5 +1,5 @@
 VERSION := $(shell git describe --always --tags --dirty)
-ldflags := "-X sqyrrl/internal.Version=${VERSION}"
+ldflags := "-X sqyrrl/server.Version=${VERSION}"
 build_args := -a -v -ldflags ${ldflags}
 
 
@@ -7,7 +7,7 @@ build_args := -a -v -ldflags ${ldflags}
 
 all: build
 
-build: build-linux
+build: build-linux build-darwin build-windows
 
 build-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ${build_args} -o sqyrrl-linux-amd64 ./cmd/sqyrrl.go

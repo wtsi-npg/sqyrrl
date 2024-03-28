@@ -1,6 +1,4 @@
 .idea/**
-.git/**
-tests/**
 
 .DS_Store
 .dockerignore
