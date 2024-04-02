@@ -34,4 +34,4 @@ coverage:
 
 clean:
 	go clean
-	rm sqyrrl-*
+	$(RM) sqyrrl-*
