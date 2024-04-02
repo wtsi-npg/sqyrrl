@@ -2,8 +2,6 @@
 
 FROM golang:1.22 as builder
 
-ARG VERSION=dev
-
 WORKDIR /app
 
 COPY ./Makefile .
