@@ -1,7 +1,5 @@
 FROM golang:1.22
 
-ARG VERSION=dev
-
 WORKDIR /app
 
 COPY go.mod go.sum ./
