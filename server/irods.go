@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/cyverse/go-irodsclient/fs"
@@ -60,9 +59,12 @@ func IRODSEnvFilePath() string {
 // InitIRODS initialises the iRODS environment by creating a populated auth file if it
 // does not already exist. This avoids the need to have `iinit` present on the server
 // host.
-func InitIRODS(manager *icommands.ICommandsEnvironmentManager, password string) error {
+func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentManager, password string) error {
 	authFile := manager.GetPasswordFilePath()
 	if _, err := os.Stat(authFile); err != nil && errors.Is(err, os.ErrNotExist) {
+		logger.Info().
+			Str("path", authFile).
+			Msg("Creating an iRODS auth file because one does not exist")
 		return icommands.EncodePasswordFile(authFile, password, os.Getuid())
 	}
 	return nil
@@ -121,21 +123,17 @@ func NewIRODSAccount(logger zerolog.Logger,
 		Str("zone", account.ClientZone).
 		Str("user", account.ClientUser).
 		Str("auth_scheme", string(account.AuthenticationScheme)).
+		Bool("cs_neg_required", account.ClientServerNegotiation).
+		Str("cs_neg_policy", string(account.CSNegotiationPolicy)).
+		Str("ca_cert_path", account.SSLConfiguration.CACertificatePath).
+		Str("ca_cert_file", account.SSLConfiguration.CACertificateFile).
+		Str("enc_alg", account.SSLConfiguration.EncryptionAlgorithm).
+		Int("key_size", account.SSLConfiguration.EncryptionKeySize).
+		Int("salt_size", account.SSLConfiguration.SaltSize).
+		Int("hash_rounds", account.SSLConfiguration.HashRounds).
 		Msg("iRODS account created")
 
 	return account, nil
-}
-
-// LevelsEqual compares two iRODS access levels for equality, normalising for the
-// differences between iRODS 4.2.x and 4.3.x. This is a workaround for the issue until
-// it's addressed upstream in go-irodsclient.
-//
-// See https://github.com/cyverse/go-irodsclient/issues/38
-func LevelsEqual(a types.IRODSAccessLevelType, b types.IRODSAccessLevelType) bool {
-	normalise := func(lvl types.IRODSAccessLevelType) string {
-		return strings.ReplaceAll(string(lvl), " ", "_")
-	}
-	return normalise(a) == normalise(b)
 }
 
 // isPublicReadable checks if the data object at the given path is readable by the
@@ -169,7 +167,7 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 
 		if effectiveUserZone == pathZone &&
 			ac.UserName == PublicUser &&
-			LevelsEqual(ac.AccessLevel, types.IRODSAccessLevelReadObject) {
+			ac.AccessLevel == types.IRODSAccessLevelReadObject {
 			logger.Trace().
 				Str("path", path).
 				Msg("Public read access found")

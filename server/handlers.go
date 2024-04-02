@@ -18,18 +18,27 @@
 package server
 
 import (
-	"fmt"
-	"net/http"
-	"path"
-
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/rs/zerolog"
+	"net/http"
+	"path"
 )
 
 // HandleHomePage is a handler for the static home page.
 func HandleHomePage(logger zerolog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Trace().Msg("HomeHandler called")
+
+		requestPath := r.URL.Path
+
+		if r.URL.Path != "/" {
+			redirect := path.Join(EndpointAPI, requestPath)
+			logger.Trace().
+				Str("from", requestPath).
+				Str("to", redirect).
+				Msg("Redirecting to API")
+			http.Redirect(w, r, redirect, http.StatusPermanentRedirect)
+		}
 
 		type customData struct {
 			URL     string
@@ -51,18 +60,12 @@ func HandleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Han
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Trace().Msg("iRODS get handler called")
 
-		if !r.URL.Query().Has(HTTPParamPath) {
-			writeErrorResponse(logger, w, http.StatusBadRequest,
-				fmt.Sprintf("'%s' parameter is missing", HTTPParamPath))
-			return
-		}
-
 		var corrID string
 		if val := r.Context().Value(correlationIDKey); val != nil {
 			corrID = val.(string)
 		}
 
-		dirtyPath := r.URL.Query().Get(HTTPParamPath)
+		dirtyPath := r.URL.Path
 		sanPath := userInputPolicy.Sanitize(dirtyPath)
 		if sanPath != dirtyPath {
 			logger.Warn().
@@ -76,6 +79,9 @@ func HandleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Han
 			Str("correlation_id", corrID).
 			Str("irods", "get").Logger()
 
-		getFileRange(rodsLogger, w, r, account, path.Clean(sanPath))
+		sanPath = path.Clean("/" + sanPath)
+		logger.Debug().Str("path", sanPath).Msg("Getting iRODS data object")
+
+		getFileRange(rodsLogger, w, r, account, sanPath)
 	})
 }

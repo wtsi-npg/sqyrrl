@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path"
 	"path/filepath"
 
@@ -63,16 +64,21 @@ var _ = Describe("iRODS Get Handler", func() {
 
 	When("a non-existent path is given", func() {
 		var r *http.Request
-		var err error
+		var handler http.Handler
 
 		BeforeEach(func() {
-			url := fmt.Sprintf("/get?%s=/no/such/file.txt", server.HTTPParamPath)
-			r, err = http.NewRequest("GET", url, nil)
+			handler = http.StripPrefix(server.EndpointAPI,
+				server.HandleIRODSGet(suiteLogger, account))
+
+			objPath := path.Join(workColl, "no", "such", "file.txt")
+			getURL, err := url.JoinPath(server.EndpointAPI, objPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			r, err = http.NewRequest("GET", getURL, nil)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should return NotFound", func() {
-			handler := server.HandleIRODSGet(suiteLogger, account)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, r)
 
@@ -82,18 +88,22 @@ var _ = Describe("iRODS Get Handler", func() {
 
 	When("a valid data object path is given", func() {
 		var r *http.Request
-		var err error
+		var handler http.Handler
 
 		BeforeEach(func() {
-			path := path.Join(workColl, testFile)
-			url := fmt.Sprintf("/get?%s=%s", server.HTTPParamPath, path)
-			r, err = http.NewRequest("GET", url, nil)
+			handler = http.StripPrefix(server.EndpointAPI,
+				server.HandleIRODSGet(suiteLogger, account))
+
+			objPath := path.Join(workColl, testFile)
+			getURL, err := url.JoinPath(server.EndpointAPI, objPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			r, err = http.NewRequest("GET", getURL, nil)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		When("the data object file does not have public read permissions", func() {
 			It("should return Forbidden", func() {
-				handler := server.HandleIRODSGet(suiteLogger, account)
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)
 
@@ -101,12 +111,15 @@ var _ = Describe("iRODS Get Handler", func() {
 			})
 		})
 
-		When("the data object does have public read permissions", func() {
+		When("the data object has public read permissions", func() {
 			var conn *connection.IRODSConnection
 			var acl []*types.IRODSAccess
 			var err error
 
 			BeforeEach(func() {
+				handler = http.StripPrefix(server.EndpointAPI,
+					server.HandleIRODSGet(suiteLogger, account))
+
 				conn, err = irodsFS.GetIOConnection()
 				Expect(err).NotTo(HaveOccurred())
 
@@ -130,7 +143,7 @@ var _ = Describe("iRODS Get Handler", func() {
 
 					if ac.UserName == server.PublicUser &&
 						ac.UserZone == testZone &&
-						server.LevelsEqual(ac.AccessLevel, types.IRODSAccessLevelReadObject) {
+						ac.AccessLevel == types.IRODSAccessLevelReadObject {
 						publicAccess = true
 					}
 				}
@@ -142,7 +155,6 @@ var _ = Describe("iRODS Get Handler", func() {
 			})
 
 			It("should return OK", func() {
-				handler := server.HandleIRODSGet(suiteLogger, account)
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)
 
@@ -150,7 +162,6 @@ var _ = Describe("iRODS Get Handler", func() {
 			})
 
 			It("should serve the correct body content", func() {
-				handler := server.HandleIRODSGet(suiteLogger, account)
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)
 

@@ -63,7 +63,7 @@ var _ = BeforeSuite(func() {
 	err = manager.SetEnvironmentFilePath(iRODSEnvFile)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = server.InitIRODS(manager, "irods")
+	err = server.InitIRODS(suiteLogger, manager, "irods")
 	Expect(err).NotTo(HaveOccurred())
 
 	account, err = server.NewIRODSAccount(suiteLogger, manager)
