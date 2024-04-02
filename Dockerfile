@@ -15,7 +15,7 @@ COPY ./templates ./templates
 RUN go mod download
 
 # Mount the .git directory to allow the build to get the version from git
-RUN --mount=source=.git,target=.git,type=bind make build-linux
+RUN --mount=type=bind,source=.git,target=.git make build-linux
 
 FROM alpine:latest
 
