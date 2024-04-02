@@ -1,25 +1,34 @@
-FROM golang:1.22
+# syntax = docker/dockerfile:1.2
+
+FROM golang:1.22 as builder
 
 ARG VERSION=dev
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
+COPY ./Makefile .
+COPY ./go.* .
 COPY ./cmd ./cmd
-COPY ./internal ./internal
+COPY ./server ./server
 COPY ./templates ./templates
 
 RUN go mod download
-RUN ls -la  /app/templates
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -a -v -ldflags "-X sqyrrl/internal.Version=${VERSION}" -o sqyrrl ./cmd/sqyrrl.go
+# Mount the .git directory to allow the build to get the version from git
+RUN --mount=type=bind,source=.git,target=.git make build-linux
 
-FROM scratch
-COPY --from=0 /app /app
+FROM alpine:latest
+
+COPY --from=builder /app/sqyrrl-linux-amd64 /app/sqyrrl
 
 WORKDIR /app
 
+RUN adduser -D sqyrrl
+
 EXPOSE 3333
 
+USER sqyrrl
+
 ENTRYPOINT ["/app/sqyrrl"]
+
+CMD ["--version"]
