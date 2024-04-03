@@ -15,7 +15,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package main
+package cmd
 
 import (
 	"fmt"
@@ -125,7 +125,7 @@ func startServer(cmd *cobra.Command, args []string) {
 	})
 }
 
-func main() {
+func CLI() {
 	rootCmd := &cobra.Command{
 		Use:              "sqyrrl",
 		Short:            "Sqyrrl.",
