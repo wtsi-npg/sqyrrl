@@ -4,16 +4,11 @@ FROM golang:1.22 as builder
 
 WORKDIR /app
 
-COPY ./Makefile .
-COPY ./go.* .
-COPY ./cmd ./cmd
-COPY ./server ./server
-COPY ./templates ./templates
+COPY . .
 
 RUN go mod download
 
-# Mount the .git directory to allow the build to get the version from git
-RUN --mount=type=bind,source=.git,target=.git make build-linux
+RUN make build-linux
 
 FROM alpine:latest
 
