@@ -120,7 +120,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 		return nil, err
 	}
 
-	sublogger := logger.With().
+	subLogger := logger.With().
 		Str("hostname", hostname).
 		Str("component", "server").Logger()
 
@@ -131,13 +131,13 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 	}
 
 	if err := manager.SetEnvironmentFilePath(config.EnvFilePath); err != nil {
-		sublogger.Err(err).
+		subLogger.Err(err).
 			Str("path", config.EnvFilePath).
 			Msg("Failed to set the iRODS environment file path")
 		return nil, err
 	}
 
-	account, err := NewIRODSAccount(sublogger, manager)
+	account, err := NewIRODSAccount(subLogger, manager)
 	if err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")
 		return nil, err
@@ -155,7 +155,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 				return serverCtx
 			}},
 		serverCtx,
-		sublogger,
+		subLogger,
 		manager,
 		account,
 	}
@@ -269,10 +269,10 @@ func (server *SqyrrlServer) waitAndShutdown() {
 	logger.Info().Msg("Server shutdown cleanly")
 }
 
-// addRequestLogger adds an HTTP request suiteLogger to the handler chain.
+// AddRequestLogger adds an HTTP request suiteLogger to the handler chain.
 //
 // If a correlation ID is present in the request context, it is logged.
-func addRequestLogger(logger zerolog.Logger) HandlerChain {
+func AddRequestLogger(logger zerolog.Logger) HandlerChain {
 	return func(next http.Handler) http.Handler {
 		lh := hlog.NewHandler(logger)
 
@@ -290,7 +290,7 @@ func addRequestLogger(logger zerolog.Logger) HandlerChain {
 				Str("method", r.Method).
 				Str("url", r.URL.RequestURI()).
 				Str("remote_addr", r.RemoteAddr).
-				Str("forwarded_for", r.Header.Get(HTTPForwardedFor)).
+				Str("forwarded_for", r.Header.Get(HeaderForwardedFor)).
 				Str("user_agent", r.UserAgent()).
 				Msg("Request served")
 		})
@@ -298,20 +298,18 @@ func addRequestLogger(logger zerolog.Logger) HandlerChain {
 	}
 }
 
-// Check the "Accept" header
-
-// addCorrelationID adds a correlation ID to the request context and response headers.
-func addCorrelationID(logger zerolog.Logger) HandlerChain {
+// AddCorrelationID adds a correlation ID to the request context and response headers.
+func AddCorrelationID(logger zerolog.Logger) HandlerChain {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var corrID string
-			if corrID = r.Header.Get(HTTPHeaderCorrelationID); corrID == "" {
+			if corrID = r.Header.Get(HeaderCorrelationID); corrID == "" {
 				corrID = xid.New().String()
 				logger.Trace().
 					Str("correlation_id", corrID).
 					Str("url", r.URL.RequestURI()).
 					Msg("Creating a new correlation ID")
-				w.Header().Add(HTTPHeaderCorrelationID, corrID)
+				w.Header().Add(HeaderCorrelationID, corrID)
 			} else {
 				logger.Trace().
 					Str("correlation_id", corrID).

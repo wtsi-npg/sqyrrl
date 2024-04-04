@@ -21,19 +21,30 @@ import (
 	"net/http"
 )
 
-const HTTPHeaderCorrelationID = "X-Correlation-ID"
-const HTTPForwardedFor = "X-Forwarded-For"
+const (
+	HeaderCorrelationID = "X-Correlation-ID"
+	HeaderForwardedFor  = "X-Forwarded-For"
+)
 
-const HTTPParamPath = "path"
+const (
+	EndpointRoot    = "/"
+	EndPointFavicon = "/favicon.ico"
+	EndpointAPI     = EndpointRoot + "api/v1/"
+)
 
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
-	logRequests := addRequestLogger(server.logger)
-	correlate := addCorrelationID(server.logger)
-	getter := HandleIRODSGet(server.logger, server.account)
-
-	// The /get endpoint is used to retrieve files from iRODS
-	mux.Handle("/get", correlate(logRequests(getter)))
+	logRequest := AddRequestLogger(server.logger)
+	correlate := AddCorrelationID(server.logger)
+	getObject := http.StripPrefix(EndpointAPI, HandleIRODSGet(server.logger, server.account))
 
 	// The home page is currently a placeholder static page showing the version
-	mux.Handle("/", correlate(logRequests(HandleHomePage(server.logger))))
+	//
+	// Any requests relative to the root are redirected to the API endpoint
+	mux.Handle("GET "+EndpointRoot, correlate(logRequest(HandleHomePage(server.logger))))
+
+	// There is no favicon, this is just to log requests
+	mux.Handle("GET "+EndPointFavicon, logRequest(http.NotFoundHandler()))
+
+	// The API endpoint is used to access files in iRODS
+	mux.Handle("GET "+EndpointAPI, correlate(logRequest(getObject)))
 }
