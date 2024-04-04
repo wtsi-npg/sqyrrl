@@ -74,18 +74,23 @@ const AppName = "sqyrrl"
 
 const correlationIDKey = ContextKey("correlation_id")
 
+const staticContentDir = "static"
+
 var userInputPolicy = bluemonday.StrictPolicy()
 
 var (
 	//go:embed templates/*
-	embedded embed.FS
+	templateFS embed.FS
 	// HTML templates used by the server
 	templates *template.Template
+
+	//go:embed static/*
+	staticContentFS embed.FS
 )
 
 // Embed the HTML templates at compile time
 func init() {
-	templates = template.Must(template.ParseFS(embedded, "templates/*"))
+	templates = template.Must(template.ParseFS(templateFS, "templates/*"))
 }
 
 // NewSqyrrlServer creates a new SqyrrlServer instance.
