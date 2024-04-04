@@ -1,18 +1,27 @@
-FROM golang:1.21.5
+# syntax = docker/dockerfile:1.2
+
+FROM golang:1.22 as builder
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
+COPY . .
 
 RUN go mod download
 
-COPY *.go account.yml lorem.txt ./
+RUN make build-linux
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o /app/server
+FROM alpine:latest
 
-FROM scratch
-COPY --from=0 /app /app
+COPY --from=builder /app/sqyrrl-linux-amd64 /app/sqyrrl
+
+WORKDIR /app
+
+RUN adduser -D sqyrrl
 
 EXPOSE 3333
 
-CMD ["/app/server"]
+USER sqyrrl
+
+ENTRYPOINT ["/app/sqyrrl"]
+
+CMD ["--version"]

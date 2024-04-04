@@ -1,22 +1,24 @@
 VERSION := $(shell git describe --always --tags --dirty)
-ldflags := "-X sqyrrl/internal.Version=${VERSION}"
+ldflags := "-X sqyrrl/server.Version=${VERSION}"
+build_args := -a -v -ldflags ${ldflags}
 
-.PHONY: build build-linux build-darwin build-windows check clean coverage go-install lint test
+
+.PHONY: build build-linux build-darwin build-windows check clean coverage install lint test
 
 all: build
 
-build: build-linux
+build: build-linux build-darwin build-windows
 
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -v -ldflags ${ldflags} -o sqyrrl-linux-amd64 ./cmd/sqyrrl.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ${build_args} -o sqyrrl-linux-amd64 ./main.go
 
 build-darwin:
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -a -v -ldflags ${ldflags} -o sqyrrl-darwin-amd64 ./cmd/sqyrrl.go
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ${build_args} -o sqyrrl-darwin-amd64 ./main.go
 
 build-windows:
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -a -v -ldflags ${ldflags} -o sqyrrl-windows-amd64.exe ./cmd/sqyrrl.go
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ${build_args} -o sqyrrl-windows-amd64.exe ./main.go
 
-go-install:
+install:
 	go install -ldflags ${ldflags}
 
 lint:
@@ -32,4 +34,4 @@ coverage:
 
 clean:
 	go clean
-	rm sqyrrl-*
+	$(RM) sqyrrl-*

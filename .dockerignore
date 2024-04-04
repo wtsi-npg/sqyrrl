@@ -1,9 +1,4 @@
-.git/**
-tests/**
+.idea/**
 
-.dockerignore
-.gitignore
 .DS_Store
-
-Dockerfile
-docker-compose.yml
+.env
