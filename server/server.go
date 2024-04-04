@@ -31,6 +31,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "crypto/tls" // Leave this to ensure that the TLS package is linked
+
 	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/cyverse/go-irodsclient/irods/util"
