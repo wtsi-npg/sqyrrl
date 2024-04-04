@@ -31,7 +31,7 @@ func HandleHomePage(logger zerolog.Logger) http.Handler {
 
 		requestPath := r.URL.Path
 
-		if r.URL.Path != "/" {
+		if requestPath != "/" {
 			redirect := path.Join(EndpointAPI, requestPath)
 			logger.Trace().
 				Str("from", requestPath).
