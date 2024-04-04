@@ -19,6 +19,7 @@ package server
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"html/template"
 	"net"
@@ -27,7 +28,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -75,21 +75,15 @@ const correlationIDKey = ContextKey("correlation_id")
 var userInputPolicy = bluemonday.StrictPolicy()
 
 var (
-	compileOnce sync.Once
-	templates   *template.Template
+	//go:embed templates/*
+	embedded embed.FS
+	// HTML templates used by the server
+	templates *template.Template
 )
 
-// GetTemplates returns the HTML templates for the server.
-//
-// This exists to allow the tests to load the templates more easily from the context of
-// the test subdirectory. This function must be called once in test suite setup,
-// with the working directory set to the root of the project, to load the templates.
-// After that, it may be called freely in any context to access the loaded templates.
-func GetTemplates() *template.Template {
-	compileOnce.Do(func() {
-		templates = template.Must(template.ParseGlob("templates/*"))
-	})
-	return templates
+// Embed the HTML templates at compile time
+func init() {
+	templates = template.Must(template.ParseFS(embedded, "templates/*"))
 }
 
 // NewSqyrrlServer creates a new SqyrrlServer instance.

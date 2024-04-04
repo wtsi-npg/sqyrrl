@@ -84,14 +84,6 @@ var _ = BeforeSuite(func() {
 					"setting up HTML templates")
 		}
 	}(dir)
-
-	// For the tests, make sure that the initial invocation of server. GetTemplates is
-	// done from a directory where the templates are located and not in the subdirectory
-	// where the tests are being run (because the templates are not there).
-	err = os.Chdir("..")
-	Expect(err).NotTo(HaveOccurred())
-
-	server.GetTemplates()
 })
 
 // Release the iRODS filesystem

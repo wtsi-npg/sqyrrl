@@ -18,10 +18,11 @@
 package server
 
 import (
-	"github.com/cyverse/go-irodsclient/irods/types"
-	"github.com/rs/zerolog"
 	"net/http"
 	"path"
+
+	"github.com/cyverse/go-irodsclient/irods/types"
+	"github.com/rs/zerolog"
 )
 
 // HandleHomePage is a handler for the static home page.
@@ -48,7 +49,7 @@ func HandleHomePage(logger zerolog.Logger) http.Handler {
 		data := customData{Version: Version, URL: r.URL.RequestURI()}
 
 		tplName := "home.gohtml"
-		if err := GetTemplates().ExecuteTemplate(w, tplName, data); err != nil {
+		if err := templates.ExecuteTemplate(w, tplName, data); err != nil {
 			logger.Err(err).
 				Str("tplName", tplName).
 				Msg("Failed to execute HTML template")
