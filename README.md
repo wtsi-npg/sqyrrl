@@ -53,6 +53,23 @@ active connections to close before shutting down.
 
 For additional options, use the `--help` flag.
 
+## iRODS authentication
+
+Sqyrrl uses the standard iRODS environment file to authenticate to iRODS. If the user has been
+authenticated with `iinit` before starting Sqyrrl, the server will use the existing iRODS auth
+file created by `iinit`. If the user has not been authenticated, Sqyrrl will require the iRODS
+password to be supplied using the environment variable `IRODS_PASSWORD`. Sqyrrl will then create
+the iRODS auth file itself, without requiring `iinit` to be used.
+
+## Running in a container
+
+When running Sqyrrl in a Docker container, configuration files (iRODS environment file, SSL
+certificates) should be mounted into the container and the password should be supplied using
+the environment variable `IRODS_PASSWORD`.
+
+The docker-compose.yml file in the repository contains an example configuration for running
+Sqyrrl in a container.
+
 ## Dependencies
 
 Sqyrrl uses [go-irodsclient](https://github.com/cyverse/go-irodsclient) to connect to iRODS. 
