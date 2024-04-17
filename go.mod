@@ -40,3 +40,5 @@ require (
 )
 
 // replace github.com/cyverse/go-irodsclient => ../go-irodsclient
+
+replace github.com/cyverse/go-irodsclient => github.com/wtsi-npg/go-irodsclient v0.0.0-20240417120912-4a4dec5bcefb
