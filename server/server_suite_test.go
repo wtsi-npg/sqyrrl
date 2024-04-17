@@ -63,7 +63,10 @@ var _ = BeforeSuite(func() {
 	err = manager.SetEnvironmentFilePath(iRODSEnvFile)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = server.InitIRODS(suiteLogger, manager, "irods")
+	err = os.Setenv(server.IRODSPasswordEnvVar, "irods")
+	Expect(err).NotTo(HaveOccurred())
+	authFilePath := manager.GetPasswordFilePath()
+	err = server.InitIRODS(suiteLogger, authFilePath, os.Getenv(server.IRODSPasswordEnvVar))
 	Expect(err).NotTo(HaveOccurred())
 
 	account, err = server.NewIRODSAccount(suiteLogger, manager)

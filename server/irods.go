@@ -33,6 +33,7 @@ import (
 
 const defaultIRODSEnvFile = "~/.irods/irods_environment.json"
 const iRODSEnvFileEnvVar = "IRODS_ENVIRONMENT_FILE"
+const IRODSPasswordEnvVar = "IRODS_PASSWORD"
 
 const PublicUser = "public"
 
@@ -59,15 +60,11 @@ func IRODSEnvFilePath() string {
 // InitIRODS initialises the iRODS environment by creating a populated auth file if it
 // does not already exist. This avoids the need to have `iinit` present on the server
 // host.
-func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentManager, password string) error {
-	authFile := manager.GetPasswordFilePath()
-	if _, err := os.Stat(authFile); err != nil && errors.Is(err, os.ErrNotExist) {
-		logger.Info().
-			Str("path", authFile).
-			Msg("Creating an iRODS auth file because one does not exist")
-		return icommands.EncodePasswordFile(authFile, password, os.Getuid())
-	}
-	return nil
+func InitIRODS(logger zerolog.Logger, authFilePath string, password string) error {
+	logger.Info().
+		Str("path", authFilePath).
+		Msg("Writing an iRODS auth file")
+	return icommands.EncodePasswordFile(authFilePath, password, os.Getuid())
 }
 
 // NewICommandsEnvironmentManager creates a new environment manager instance.
@@ -117,11 +114,38 @@ func NewIRODSAccount(logger zerolog.Logger,
 		return nil, err
 	}
 
+	authFilePath := manager.GetPasswordFilePath()
+	if _, err := os.Stat(authFilePath); err != nil && errors.Is(err, os.ErrNotExist) {
+		password, ok := os.LookupEnv(IRODSPasswordEnvVar)
+		if !ok {
+			logger.Error().
+				Str("variable", IRODSPasswordEnvVar).
+				Msg("Environment variable not set")
+			return nil, errors.New("the iRODS password environment variable was not set")
+		}
+		if password == "" {
+			logger.Error().
+				Str("variable", IRODSPasswordEnvVar).
+				Msg("Environment variable empty")
+			return nil, errors.New("the iRODS password environment variable was empty")
+		}
+		account.Password = password
+
+		if err = InitIRODS(logger, authFilePath, password); err != nil {
+			logger.Err(err).
+				Str("path", authFilePath).
+				Msg("Failed to initialise iRODS")
+			return nil, err
+		}
+	}
+
 	logger.Info().
 		Str("host", account.Host).
 		Int("port", account.Port).
 		Str("zone", account.ClientZone).
 		Str("user", account.ClientUser).
+		Str("env_file", manager.GetEnvironmentFilePath()).
+		Str("auth_file", manager.GetPasswordFilePath()).
 		Str("auth_scheme", string(account.AuthenticationScheme)).
 		Bool("cs_neg_required", account.ClientServerNegotiation).
 		Str("cs_neg_policy", string(account.CSNegotiationPolicy)).
