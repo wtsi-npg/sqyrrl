@@ -102,7 +102,7 @@ var _ = Describe("iRODS Get Handler", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		When("the data object file does not have public read permissions", func() {
+		When("the data object does not have public read permissions", func() {
 			It("should return Forbidden", func() {
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)

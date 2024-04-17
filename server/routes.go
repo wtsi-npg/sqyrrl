@@ -27,24 +27,28 @@ const (
 )
 
 const (
-	EndpointRoot    = "/"
-	EndPointFavicon = "/favicon.ico"
-	EndpointAPI     = EndpointRoot + "api/v1/"
+	EndpointRoot   = "/"
+	EndPointStatic = EndpointRoot + "static/"
+	EndpointAPI    = EndpointRoot + "api/v1/"
 )
 
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 	logRequest := AddRequestLogger(server.logger)
 	correlate := AddCorrelationID(server.logger)
+
+	getStatic := http.StripPrefix(EndPointStatic, HandleStaticContent(server.logger))
 	getObject := http.StripPrefix(EndpointAPI, HandleIRODSGet(server.logger, server.account))
 
 	// The home page is currently a placeholder static page showing the version
 	//
 	// Any requests relative to the root are redirected to the API endpoint
-	mux.Handle("GET "+EndpointRoot, correlate(logRequest(HandleHomePage(server.logger))))
+	mux.Handle("GET "+EndpointRoot,
+		correlate(logRequest(HandleHomePage(server.logger))))
 
-	// There is no favicon, this is just to log requests
-	mux.Handle("GET "+EndPointFavicon, logRequest(http.NotFoundHandler()))
+	mux.Handle("GET "+EndPointStatic,
+		correlate(logRequest(getStatic)))
 
 	// The API endpoint is used to access files in iRODS
-	mux.Handle("GET "+EndpointAPI, correlate(logRequest(getObject)))
+	mux.Handle("GET "+EndpointAPI,
+		correlate(logRequest(getObject)))
 }

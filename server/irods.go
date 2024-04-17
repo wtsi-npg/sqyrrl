@@ -144,15 +144,15 @@ func NewIRODSAccount(logger zerolog.Logger,
 // which is normally the current zone. This is consulted only if the ACL user zone is
 // empty.
 func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
-	userZone string, path string) (bool, error) {
+	userZone string, rodsPath string) (bool, error) {
 	var acl []*types.IRODSAccess
 	var pathZone string
 	var err error
 
-	if acl, err = filesystem.ListACLs(path); err != nil {
+	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
 		return false, err
 	}
-	if pathZone, err = util.GetIRODSZone(path); err != nil {
+	if pathZone, err = util.GetIRODSZone(rodsPath); err != nil {
 		return false, err
 	}
 
@@ -169,20 +169,20 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 			ac.UserName == PublicUser &&
 			ac.AccessLevel == types.IRODSAccessLevelReadObject {
 			logger.Trace().
-				Str("path", path).
+				Str("path", rodsPath).
 				Msg("Public read access found")
 
 			return true, nil
 		}
 	}
 
-	logger.Trace().Str("path", path).Msg("Public read access not found")
+	logger.Trace().Str("path", rodsPath).Msg("Public read access not found")
 
 	return false, nil
 }
 
 func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
-	account *types.IRODSAccount, path string) {
+	account *types.IRODSAccount, rodsPath string) {
 
 	// TODO: filesystem is thread safe, so it can be shared across requests
 	filesystem, err := fs.NewFileSystemWithDefault(account, AppName)
@@ -194,36 +194,36 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 
 	defer filesystem.Release()
 
-	// Don't use filesystem.ExistsFile(path) here because it will return false if the
+	// Don't use filesystem.ExistsFile(objPath) here because it will return false if the
 	// file _does_ exist on the iRODS server, but the server is down or unreachable.
 	//
-	// filesystem.StatFile(path) is better because we can check for the error type.
-	_, err = filesystem.StatFile(path)
+	// filesystem.StatFile(objPath) is better because we can check for the error type.
+	_, err = filesystem.StatFile(rodsPath)
 	if err != nil {
 		if types.IsAuthError(err) {
 			logger.Err(err).
-				Str("path", path).
+				Str("path", rodsPath).
 				Msg("Failed to authenticate with iRODS")
 			writeErrorResponse(logger, w, http.StatusUnauthorized)
 			return
 		}
 		if types.IsFileNotFoundError(err) {
 			logger.Info().
-				Str("path", path).
+				Str("path", rodsPath).
 				Msg("Requested path does not exist")
 			writeErrorResponse(logger, w, http.StatusNotFound)
 			return
 		}
-		logger.Err(err).Str("path", path).Msg("Failed to stat file")
+		logger.Err(err).Str("path", rodsPath).Msg("Failed to stat file")
 		writeErrorResponse(logger, w, http.StatusInternalServerError)
 		return
 	}
 
 	zone := account.ClientZone
-	publicReadable, err := isPublicReadable(logger, filesystem, zone, path)
+	publicReadable, err := isPublicReadable(logger, filesystem, zone, rodsPath)
 	if err != nil {
 		logger.Err(err).
-			Str("path", path).
+			Str("path", rodsPath).
 			Msg("Failed to check public read access")
 		writeErrorResponse(logger, w, http.StatusInternalServerError)
 		return
@@ -231,16 +231,16 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 
 	if !publicReadable {
 		logger.Info().
-			Str("path", path).
+			Str("path", rodsPath).
 			Msg("Requested path is not public readable")
 		writeErrorResponse(logger, w, http.StatusForbidden)
 		return
 	}
 
-	fh, err := filesystem.OpenFile(path, "", "r")
+	fh, err := filesystem.OpenFile(rodsPath, "", "r")
 	if err != nil {
 		logger.Err(err).
-			Str("path", path).
+			Str("path", rodsPath).
 			Msg("Failed to open file")
 		writeErrorResponse(logger, w, http.StatusInternalServerError)
 		return
@@ -249,11 +249,11 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 	defer func(fh *fs.FileHandle) {
 		if ferr := fh.Close(); ferr != nil {
 			logger.Err(ferr).
-				Str("path", path).
+				Str("path", rodsPath).
 				Msg("Failed to close file handle")
 		}
 	}(fh)
 
-	logger.Info().Str("path", path).Msg("Serving file")
-	http.ServeContent(w, r, path, time.Now(), fh)
+	logger.Info().Str("path", rodsPath).Msg("Serving file")
+	http.ServeContent(w, r, rodsPath, time.Now(), fh)
 }

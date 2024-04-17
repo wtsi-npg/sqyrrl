@@ -18,6 +18,7 @@
 package server
 
 import (
+	"io/fs"
 	"net/http"
 	"path"
 
@@ -55,6 +56,19 @@ func HandleHomePage(logger zerolog.Logger) http.Handler {
 				Msg("Failed to execute HTML template")
 		}
 	})
+}
+
+func HandleStaticContent(logger zerolog.Logger) http.Handler {
+	sub := func(dir fs.FS, name string) fs.FS {
+		f, err := fs.Sub(dir, name)
+		if err != nil {
+			logger.Err(err).
+				Str("dir", name).
+				Msg("Failed to get subdirectory from static content")
+		}
+		return f
+	}
+	return http.FileServer(http.FS(sub(staticContentFS, staticContentDir)))
 }
 
 func HandleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Handler {
