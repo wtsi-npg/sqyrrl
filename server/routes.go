@@ -43,7 +43,7 @@ func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 	//
 	// Any requests relative to the root are redirected to the API endpoint
 	mux.Handle("GET "+EndpointRoot,
-		correlate(logRequest(HandleHomePage(server.logger))))
+		correlate(logRequest(HandleHomePage(server.logger, server.index))))
 
 	mux.Handle("GET "+EndPointStatic,
 		correlate(logRequest(getStatic)))

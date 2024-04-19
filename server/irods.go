@@ -37,6 +37,12 @@ const IRODSPasswordEnvVar = "IRODS_PASSWORD"
 
 const PublicUser = "public"
 
+const Namespace = "sqyrrl"
+const NamespaceSeparator = ":"
+const IndexAttr = Namespace + NamespaceSeparator + "index"
+const IndexValue = "1"
+const CategoryAttr = Namespace + NamespaceSeparator + "category"
+
 // IRODSEnvFilePath returns the path to the iRODS environment file. If the path
 // is not set in the environment, the default path is returned.
 func IRODSEnvFilePath() string {
@@ -205,6 +211,8 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 	return false, nil
 }
 
+// getFileRange serves a file from iRODS to the client. It delegates to http.ServeContent
+// which sets the appropriate headers, including Content-Type.
 func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 	account *types.IRODSAccount, rodsPath string) {
 
@@ -280,4 +288,41 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 
 	logger.Info().Str("path", rodsPath).Msg("Serving file")
 	http.ServeContent(w, r, rodsPath, time.Now(), fh)
+}
+
+// The index attribute and value should be configurable so that individual users can
+// customise the metadata used to index their data. This will allow them to focus on
+// specific data objects or collections interesting to them.
+
+// findItems runs a metadata query against iRODS to find any items that have metadata
+// with the key sqyrrl::index and value 1. The items are grouped by the value of the
+// metadata.
+func findItems(filesystem *fs.FileSystem) ([]Item, error) {
+	entries, err := filesystem.SearchByMeta(IndexAttr, IndexValue)
+	if err != nil {
+		return nil, err
+	}
+
+	filesystem.ClearCache()
+
+	var items []Item
+	for _, entry := range entries {
+		acl, err := filesystem.ListACLs(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		metadata, err := filesystem.ListMetadata(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, Item{
+			Path:     entry.Path,
+			Size:     entry.Size,
+			ACL:      acl,
+			Metadata: metadata,
+		})
+	}
+	return items, nil
 }

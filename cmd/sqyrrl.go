@@ -41,7 +41,9 @@ type cliFlags struct {
 
 	host  string // Address to listen on, host part
 	level string // Logging level
-	port  int    // Port to listen on
+	port  string // Port to listen on
+
+	indexInterval time.Duration // Interval to index files
 }
 
 var cliFlagsSelected = cliFlags{
@@ -117,11 +119,12 @@ func startServer(cmd *cobra.Command, args []string) {
 	logger := configureRootLogger(&cliFlagsSelected)
 
 	server.ConfigureAndStart(logger, server.Config{
-		Host:         cliFlagsSelected.host,
-		Port:         cliFlagsSelected.port,
-		CertFilePath: cliFlagsSelected.certFilePath,
-		KeyFilePath:  cliFlagsSelected.keyFilePath,
-		EnvFilePath:  cliFlagsSelected.envFilePath,
+		Host:          cliFlagsSelected.host,
+		Port:          cliFlagsSelected.port,
+		CertFilePath:  cliFlagsSelected.certFilePath,
+		KeyFilePath:   cliFlagsSelected.keyFilePath,
+		EnvFilePath:   cliFlagsSelected.envFilePath,
+		IndexInterval: cliFlagsSelected.indexInterval,
 	})
 }
 
@@ -147,8 +150,8 @@ func CLI() {
 	startCmd.Flags().StringVar(&cliFlagsSelected.host,
 		"host", "localhost",
 		"Address on which to listen, host part")
-	startCmd.Flags().IntVar(&cliFlagsSelected.port,
-		"port", 3333,
+	startCmd.Flags().StringVar(&cliFlagsSelected.port,
+		"port", "3333",
 		"Port on which to listen")
 	startCmd.Flags().StringVar(&cliFlagsSelected.certFilePath,
 		"cert-file", "",
@@ -159,6 +162,9 @@ func CLI() {
 	startCmd.Flags().StringVar(&cliFlagsSelected.envFilePath,
 		"irods-env", server.IRODSEnvFilePath(),
 		"Path to the iRODS environment file")
+	startCmd.Flags().DurationVar(&cliFlagsSelected.indexInterval,
+		"index-interval", server.DefaultIndexInterval,
+		"Interval at which update the index")
 
 	rootCmd.AddCommand(startCmd)
 
