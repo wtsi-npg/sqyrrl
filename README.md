@@ -37,21 +37,24 @@ Usage:
   sqyrrl start [flags]
 
 Flags:
-      --cert-file string   Path to the SSL certificate file
-  -h, --help               help for start
-      --host string        Address on which to listen, host part (default "localhost")
-      --irods-env string   Path to the iRODS environment file (default "~/.irods/irods_environment.json")
-      --key-file string    Path to the SSL private key file
-      --port int           Port on which to listen (default 3333)
+      --cert-file string          Path to the SSL certificate file
+  -h, --help                      help for start
+      --host string               Address on which to listen, host part (default "localhost")
+      --index-interval duration   Interval at which update the index (default 1m0s)
+      --irods-env string          Path to the iRODS environment file (default "/Users/kdj/.irods/irods_environment.json")
+      --key-file string           Path to the SSL private key file
+      --port string               Port on which to listen (default "3333")
 
 Global Flags:
       --log-level string   Set the log level (trace, debug, info, warn, error) (default "info")
+
 ```
 
 To stop the server, send `SIGINT` or `SIGTERM` to the process. The server will wait for
 active connections to close before shutting down.
 
 For additional options, use the `--help` flag.
+
 
 ## iRODS authentication
 
@@ -69,6 +72,17 @@ the environment variable `IRODS_PASSWORD`.
 
 The docker-compose.yml file in the repository contains an example configuration for running
 Sqyrrl in a container.
+
+## Tagging iRODS data objects for display on the home page
+
+This is an experimental feature. It allows the user to tag iRODS data objects with metadata so
+that  they will be displayed in the Sqyrrl home page for convenience. To tag an iRODS data object,
+add a  metadata attribute `sqyrrl:index` with value `1`. Data objects may be  grouped together
+on the page,  under a title, known as a "category". To specify a category for a data object,
+add a metadata attribute `sqyrrl:category` with the  value being the category name.
+
+The home page will be re-indexed at the interval specified by the `--index-interval` flag. The
+home page auto-refreshes every 30 seconds.
 
 ## Dependencies
 
