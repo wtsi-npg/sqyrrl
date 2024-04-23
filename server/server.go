@@ -21,12 +21,13 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
-	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,12 +47,13 @@ type ContextKey string
 // SqyrrlServer is an HTTP server which contains an embedded iRODS client.
 type SqyrrlServer struct {
 	http.Server
-	context       context.Context                        // Context for clean shutdown
-	logger        zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
-	manager       *icommands.ICommandsEnvironmentManager // iRODS manager for the embedded client
-	account       *types.IRODSAccount                    // iRODS account for the embedded client
-	indexInterval time.Duration                          // Interval for indexing items
-	index         *ItemIndex                             // ItemIndex of items in the iRODS server
+	config  Config
+	context context.Context                        // Context for clean shutdown
+	cancel  context.CancelFunc                     // Cancel function for the server
+	logger  zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
+	manager *icommands.ICommandsEnvironmentManager // iRODS manager for the embedded client
+	account *types.IRODSAccount                    // iRODS account for the embedded client
+	index   *ItemIndex                             // ItemIndex of items in the iRODS server
 }
 
 type Config struct {
@@ -65,8 +67,10 @@ type Config struct {
 
 const AppName = "sqyrrl"
 
-const MinIndexInterval = 10 * time.Second
-const DefaultIndexInterval = 60 * time.Second
+const (
+	MinIndexInterval     = 10 * time.Second
+	DefaultIndexInterval = 60 * time.Second
+)
 
 const correlationIDKey = ContextKey("correlation_id")
 
@@ -98,31 +102,30 @@ func init() {
 //
 // The logger should be the root logger of the application. The server will create
 // sub-loggers for its components.
-func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error) {
+func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer, err error) { // NRV
 	if config.Host == "" {
-		return nil, errors.New("missing host")
+		return nil, fmt.Errorf("server config %w: host", ErrMissingArgument)
 	}
 	if config.Port == "" {
-		return nil, errors.New("missing port")
+		return nil, fmt.Errorf("server config %w: port", ErrMissingArgument)
 	}
 	if config.CertFilePath == "" {
 		return nil,
-			errors.New("missing certificate file path")
+			fmt.Errorf("server config %w: certificate file path", ErrMissingArgument)
 	}
 
-	indexInterval := config.IndexInterval
-	if indexInterval < MinIndexInterval {
+	if config.IndexInterval < MinIndexInterval {
 		logger.Warn().
-			Dur("interval", indexInterval).
+			Dur("interval", config.IndexInterval).
 			Dur("min_interval", MinIndexInterval).
 			Msg("Index interval too short, using the default interval")
-		indexInterval = DefaultIndexInterval
+		config.IndexInterval = DefaultIndexInterval
 	}
 
-	// The sub-suiteLogger adds "hostname and" "component" field to the log entries. Further
+	// The sub-logger adds "hostname and" "component" field to the log entries. Further
 	// fields are added by other components e.g. in the HTTP handlers.
-	hostname, err := os.Hostname()
-	if err != nil {
+	var hostname string
+	if hostname, err = os.Hostname(); err != nil {
 		return nil, err
 	}
 
@@ -130,21 +133,21 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 		Str("hostname", hostname).
 		Str("component", "server").Logger()
 
-	manager, err := NewICommandsEnvironmentManager()
-	if err != nil {
-		logger.Err(err).Msg("failed to create an iRODS environment manager")
+	var manager *icommands.ICommandsEnvironmentManager
+	if manager, err = NewICommandsEnvironmentManager(); err != nil {
+		logger.Err(err).Msg("Failed to create an iRODS environment manager")
 		return nil, err
 	}
 
-	if err := manager.SetEnvironmentFilePath(config.EnvFilePath); err != nil {
+	if err = manager.SetEnvironmentFilePath(config.EnvFilePath); err != nil {
 		subLogger.Err(err).
 			Str("path", config.EnvFilePath).
 			Msg("Failed to set the iRODS environment file path")
 		return nil, err
 	}
 
-	account, err := NewIRODSAccount(subLogger, manager)
-	if err != nil {
+	var account *types.IRODSAccount
+	if account, err = NewIRODSAccount(subLogger, manager); err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")
 		return nil, err
 	}
@@ -153,24 +156,44 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 	mux := http.NewServeMux()
 	serverCtx, cancelServer := context.WithCancel(context.Background())
 
-	server := &SqyrrlServer{
+	server = &SqyrrlServer{
 		http.Server{
 			Addr:    addr,
 			Handler: mux,
 			BaseContext: func(listener net.Listener) context.Context {
 				return serverCtx
 			}},
+		config,
 		serverCtx,
+		cancelServer,
 		subLogger,
 		manager,
 		account,
-		indexInterval,
 		NewItemIndex([]Item{}),
 	}
 
-	server.setUpIndexing(serverCtx)
-	server.setUpSignalHandler(cancelServer)
+	err = server.setUpIndexing()
+	if err != nil {
+		return nil, err
+	}
+
+	var cwd string
+	cwd, err = os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	server.setUpSignalHandler()
 	server.addRoutes(mux)
+
+	logger.Info().
+		Str("host", config.Host).
+		Str("port", config.Port).
+		Str("cert_file", config.CertFilePath).
+		Str("key_file", config.KeyFilePath).
+		Str("irods_env", config.EnvFilePath).
+		Str("cwd", cwd).
+		Dur("index_interval", config.IndexInterval).Msg("Server configured")
 
 	return server, nil
 }
@@ -183,11 +206,35 @@ func (server *SqyrrlServer) IRODSAuthFilePath() string {
 	return server.manager.GetPasswordFilePath()
 }
 
-func (server *SqyrrlServer) Start(certFile string, keyFile string) {
+// Start starts the server. This function blocks until the server is stopped.
+//
+// To stop the server, send SIGINT or SIGTERM to the process or call the server's Stop
+// function directly from another goroutine. An error is returned if the server fails
+// to start or if it fails to stop cleanly (with http.ErrServerClosed).
+func (server *SqyrrlServer) Start() error {
+	var serveErr, shutErr error
+
 	go func() {
 		logger := server.logger
 
-		err := server.ListenAndServeTLS(certFile, keyFile)
+		// The following make it easier to diagnose issues with missing files
+		// given as relative paths. We don't abort on errors here because it's cleaner
+		// to allow the server to try to start and clean up any resulting error in one
+		// place.
+		absCertFilePath, err := filepath.Abs(server.config.CertFilePath)
+		if err != nil {
+			logger.Err(err).
+				Str("path", server.config.CertFilePath).
+				Msg("Failed to get the absolute path of the certificate file")
+		}
+		absKeyFilePath, err := filepath.Abs(server.config.KeyFilePath)
+		if err != nil {
+			logger.Err(err).
+				Str("path", server.config.KeyFilePath).
+				Msg("Failed to get the absolute path of the key file")
+		}
+
+		err = server.ListenAndServeTLS(absCertFilePath, absKeyFilePath)
 
 		logger.Info().Msg("Server stopped listening")
 		if err != nil {
@@ -196,15 +243,25 @@ func (server *SqyrrlServer) Start(certFile string, keyFile string) {
 				logger.Info().Msg("Server closed cleanly")
 			default:
 				logger.Err(err).Msg("Server closed with an error")
+				serveErr = err
+				server.cancel() // If something went wrong, ensure that the server stops
 			}
 		}
 	}()
+
 	<-server.context.Done()
 
-	server.waitAndShutdown()
+	shutErr = server.waitAndShutdown()
+
+	return errors.Join(serveErr, shutErr)
 }
 
-func (server *SqyrrlServer) setUpSignalHandler(cancel context.CancelFunc) {
+// Stop stops the server. It provides a public means to call the server's cancel function.
+func (server *SqyrrlServer) Stop() {
+	server.cancel()
+}
+
+func (server *SqyrrlServer) setUpSignalHandler() {
 	logger := server.logger
 
 	signals := make(chan os.Signal, 1)
@@ -218,7 +275,7 @@ func (server *SqyrrlServer) setUpSignalHandler(cancel context.CancelFunc) {
 			logger.Info().
 				Str("signal", sig.String()).
 				Msg("Server shutting down on signal")
-			cancel()
+			server.cancel()
 		default:
 			logger.Warn().
 				Str("signal", sig.String()).
@@ -227,92 +284,101 @@ func (server *SqyrrlServer) setUpSignalHandler(cancel context.CancelFunc) {
 	}()
 }
 
-func (server *SqyrrlServer) setUpIndexing(ctx context.Context) {
+func (server *SqyrrlServer) setUpIndexing() (err error) { // NRV
 	logger := server.logger
 
-	filesystem, err := fs.NewFileSystemWithDefault(server.account, AppName)
+	var filesystem *fs.FileSystem
+	filesystem, err = fs.NewFileSystemWithDefault(server.account, AppName)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// Query the iRODS server for items at regular intervals
-	items := queryAtIntervalsWithBackoff(logger, ctx, server.indexInterval,
+	itemChan := queryAtIntervals(logger, server.context, server.config.IndexInterval,
 		func() ([]Item, error) {
 			return findItems(filesystem)
 		})
 
-	logger.Info().Dur("interval", server.indexInterval).Msg("Indexing started")
+	logger.Info().Dur("interval", server.config.IndexInterval).Msg("Indexing started")
 
-	// Create an index of items
+	// Create an index of items. This goroutine updates the index from the item
+	// channel. It is the only goroutine that receives from the channel and the only
+	// one that updates the index, meaning it doesn't require a mutex for that.
+	// However, the index may be read by multiple HTTP requests, so has a mutex to
+	// prevent it being read during updates.
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-server.context.Done():
 				logger.Info().Msg("Indexing cancelled")
 				return
-			case items := <-items:
-				server.index.items = items
+			case items := <-itemChan:
+				server.index.SetItems(items)
 				logger.Info().
 					Str("index", server.index.String()).
 					Msg("Updated index")
 			}
 		}
 	}()
+
+	return nil
 }
 
-func (server *SqyrrlServer) waitAndShutdown() {
+func (server *SqyrrlServer) waitAndShutdown() (err error) { // NRV
 	logger := server.logger
 
 	timeoutCtx, cancelTimeout := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelTimeout()
 
-	if err := server.Shutdown(timeoutCtx); err != nil {
+	if err = server.Shutdown(timeoutCtx); err != nil {
 		logger.Err(err).Msg("Error shutting down server")
 	}
 	logger.Info().Msg("Server shutdown cleanly")
+
+	return err
 }
 
-func ConfigureAndStart(logger zerolog.Logger, config Config) {
+func ConfigureAndStart(logger zerolog.Logger, config Config) error {
 	if config.Host == "" {
-		logger.Error().Msg("Missing host component of address to listen on")
-		return
+		// return errors.New("missing host component of address to listen on")
+		return fmt.Errorf("server config %w: address", ErrMissingArgument)
 	}
 	if config.Port == "" {
-		logger.Error().Msg("Missing port component of address to listen on")
-		return
+		// return errors.New("missing port component of address to listen on")
+		return fmt.Errorf("server config %w: port", ErrMissingArgument)
 	}
 	if config.CertFilePath == "" {
-		logger.Error().Msg("Missing certificate file path")
-		return
+		// return errors.New("missing certificate file path")
+		return fmt.Errorf("server config %w: certificate file path", ErrMissingArgument)
 	}
 	if config.KeyFilePath == "" {
-		logger.Error().Msg("Missing key file path")
-		return
+		// return errors.New("missing key file path")
+		return fmt.Errorf("server config %w: key file path", ErrMissingArgument)
 	}
 	if config.EnvFilePath == "" {
-		logger.Error().Msg("Missing iRODS environment file path")
-		return
+		// return errors.New("missing iRODS environment file path")
+		return fmt.Errorf("server config %w: iRODS environment file path", ErrMissingArgument)
 	}
 	if !(config.IndexInterval > 0) {
-		logger.Error().Msg("Missing index interval")
-		return
+		// return errors.New("missing index interval")
+		return fmt.Errorf("server config %w: index interval", ErrMissingArgument)
 	}
 
 	envFilePath, err := util.ExpandHomeDir(config.EnvFilePath)
 	if err != nil {
 		logger.Err(err).Str("path", config.EnvFilePath).
 			Msg("Failed to expand the iRODS environment file path")
-		return
+		return err
 	}
 	config.EnvFilePath = envFilePath
 
-	server, err := NewSqyrrlServer(logger, config)
+	var server *SqyrrlServer
+	server, err = NewSqyrrlServer(logger, config)
 	if err != nil {
-		logger.Err(err).Msg("Failed to create a server")
-		return
+		return err
 	}
 
-	server.Start(config.CertFilePath, config.KeyFilePath)
+	return server.Start()
 }
 
 func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int, message ...string) {
@@ -332,55 +398,38 @@ func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int, 
 	http.Error(w, msg, code)
 }
 
-// queryAtIntervalsWithBackoff runs a query at regular intervals until the context is
-// cancelled.
-//
-// If the query takes longer than the interval, the next query is delayed by
-// the time taken by the previous query. If the query takes less time than the interval
-// by a certain factor, the interval is shrunk to that value, but not below the original.
-func queryAtIntervalsWithBackoff(logger zerolog.Logger, ctx context.Context,
-	interval time.Duration, queryFn func() ([]Item, error)) chan []Item {
-	items := make(chan []Item)
+// queryAtIntervals runs a query at regular intervals until the context is cancelled.
+func queryAtIntervals(logger zerolog.Logger, ctx context.Context,
+	interval time.Duration, queryFn func() ([]Item, error)) <-chan []Item {
+	itemChan := make(chan []Item)
 
-	origInterval := interval
-	shrinkFactor := 0.7
 	findTick := time.NewTicker(interval)
 
 	go func() {
-		defer close(items)
+		defer close(itemChan)
 		defer findTick.Stop()
 
 		for {
 			select {
 			case <-findTick.C:
 				start := time.Now()
-				x, err := queryFn()
+				items, err := queryFn()
+
+				// If the query failed, do not use its runtime to adjust the interval
 				if err != nil {
 					logger.Err(err).Msg("Query failed")
-				} else {
-					items <- x
+					continue
 				}
 
+				itemChan <- items
 				elapsed := time.Since(start)
+				logger.Debug().Dur("elapsed", elapsed).Msg("Query completed")
 
-				// If the query took longer than the interval, back off by making the next
-				// query wait for the extra amount of time in excess of the internal that
-				// the last query took.
 				if elapsed > interval {
-					backoff := time.NewTimer(elapsed - interval)
-					select {
-					case <-backoff.C:
-						// Continue to the next iteration
-					case <-ctx.Done():
-						logger.Info().Msg("Query cancelled")
-						return
-					}
-				}
-				// If the query took less time than the interval by the shrink factor,
-				// shrink the interval to that value, but not below the original value.
-				threshold := interval.Seconds() * shrinkFactor
-				if elapsed.Seconds() < threshold {
-					interval = time.Duration(math.Max(threshold, origInterval.Seconds()))
+					logger.Warn().
+						Dur("elapsed", elapsed).
+						Dur("interval", interval).
+						Msg("Query took longer than interval")
 				}
 			case <-ctx.Done():
 				logger.Info().Msg("Query cancelled")
@@ -389,5 +438,5 @@ func queryAtIntervalsWithBackoff(logger zerolog.Logger, ctx context.Context,
 		}
 	}()
 
-	return items
+	return itemChan
 }
