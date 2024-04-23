@@ -19,6 +19,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,24 +32,27 @@ import (
 	"github.com/rs/zerolog"
 )
 
-const defaultIRODSEnvFile = "~/.irods/irods_environment.json"
-const iRODSEnvFileEnvVar = "IRODS_ENVIRONMENT_FILE"
-const IRODSPasswordEnvVar = "IRODS_PASSWORD"
+const (
+	IRODSEnvFileDefault = "~/.irods/irods_environment.json"
+	IRODSEnvFileEnvVar  = "IRODS_ENVIRONMENT_FILE"
+	IRODSPasswordEnvVar = "IRODS_PASSWORD"
+	IRODSPublicUser     = "public"
+)
 
-const PublicUser = "public"
-
-const Namespace = "sqyrrl"
-const NamespaceSeparator = ":"
-const IndexAttr = Namespace + NamespaceSeparator + "index"
-const IndexValue = "1"
-const CategoryAttr = Namespace + NamespaceSeparator + "category"
+const (
+	Namespace          = "sqyrrl"
+	NamespaceSeparator = ":"
+	IndexAttr          = Namespace + NamespaceSeparator + "index"
+	IndexValue         = "1"
+	CategoryAttr       = Namespace + NamespaceSeparator + "category"
+)
 
 // IRODSEnvFilePath returns the path to the iRODS environment file. If the path
 // is not set in the environment, the default path is returned.
 func IRODSEnvFilePath() string {
-	path := os.Getenv(iRODSEnvFileEnvVar)
+	path := os.Getenv(IRODSEnvFileEnvVar)
 	if path == "" {
-		path = defaultIRODSEnvFile
+		path = IRODSEnvFileDefault
 	}
 	path = filepath.Clean(path)
 
@@ -84,13 +88,13 @@ func NewICommandsEnvironmentManager() (*icommands.ICommandsEnvironmentManager, e
 // NewIRODSAccount returns an iRODS account instance using the iRODS environment for
 // configuration. The environment file path is obtained from the manager.
 func NewIRODSAccount(logger zerolog.Logger,
-	manager *icommands.ICommandsEnvironmentManager) (*types.IRODSAccount, error) {
+	manager *icommands.ICommandsEnvironmentManager) (account *types.IRODSAccount, err error) { // NRV
 	// manager.Load() below will succeed even if the iRODS environment file does not
 	// exist, but we absolutely don't want that behaviour here.
-	var fileInfo os.FileInfo
-	var err error
 
 	envFilePath := manager.GetEnvironmentFilePath()
+
+	var fileInfo os.FileInfo
 	if fileInfo, err = os.Stat(envFilePath); err != nil && os.IsNotExist(err) {
 		logger.Err(err).
 			Str("path", envFilePath).
@@ -98,7 +102,7 @@ func NewIRODSAccount(logger zerolog.Logger,
 		return nil, err
 	}
 	if fileInfo.IsDir() {
-		err = errors.New("iRODS environment file is a directory")
+		err = fmt.Errorf("iRODS environment file is a directory: %w", ErrInvalidArgument)
 		logger.Err(err).
 			Str("path", envFilePath).
 			Msg("iRODS environment file is a directory")
@@ -114,26 +118,31 @@ func NewIRODSAccount(logger zerolog.Logger,
 		Str("path", envFilePath).
 		Msg("Loaded iRODS environment file")
 
-	var account *types.IRODSAccount
 	if account, err = manager.ToIRODSAccount(); err != nil {
 		logger.Err(err).Msg("Failed to obtain an iRODS account instance")
 		return nil, err
 	}
 
 	authFilePath := manager.GetPasswordFilePath()
-	if _, err := os.Stat(authFilePath); err != nil && errors.Is(err, os.ErrNotExist) {
+	if _, err = os.Stat(authFilePath); err != nil && errors.Is(err, os.ErrNotExist) {
+		logger.Info().
+			Str("path", authFilePath).
+			Msg("iRODS auth file does not exist; using the iRODS password environment variable")
+
 		password, ok := os.LookupEnv(IRODSPasswordEnvVar)
 		if !ok {
 			logger.Error().
 				Str("variable", IRODSPasswordEnvVar).
 				Msg("Environment variable not set")
-			return nil, errors.New("the iRODS password environment variable was not set")
+			return nil, fmt.Errorf("%s environment variable was not set: %w",
+				IRODSPasswordEnvVar, ErrMissingArgument)
 		}
 		if password == "" {
 			logger.Error().
 				Str("variable", IRODSPasswordEnvVar).
 				Msg("Environment variable empty")
-			return nil, errors.New("the iRODS password environment variable was empty")
+			return nil, fmt.Errorf("%s environment variable was empty: %w",
+				IRODSPasswordEnvVar, ErrInvalidArgument)
 		}
 		account.Password = password
 
@@ -163,7 +172,26 @@ func NewIRODSAccount(logger zerolog.Logger,
 		Int("hash_rounds", account.SSLConfiguration.HashRounds).
 		Msg("iRODS account created")
 
-	return account, nil
+	// Before returning the account, check that it is usable by connecting to the
+	// iRODS server and accessing the root collection.
+	var filesystem *fs.FileSystem
+	filesystem, err = fs.NewFileSystemWithDefault(account, AppName)
+	if err != nil {
+		logger.Err(err).Msg("Failed to create an iRODS file system")
+		return nil, err
+	}
+
+	var root *fs.Entry
+	root, err = filesystem.StatDir("/")
+	if err != nil {
+		logger.Err(err).Msg("Failed to stat the root zone collection")
+		return nil, err
+	}
+	logger.Debug().
+		Str("path", root.Path).
+		Msg("Root zone collection is accessible")
+
+	return account, err
 }
 
 // isPublicReadable checks if the data object at the given path is readable by the
@@ -174,10 +202,9 @@ func NewIRODSAccount(logger zerolog.Logger,
 // which is normally the current zone. This is consulted only if the ACL user zone is
 // empty.
 func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
-	userZone string, rodsPath string) (bool, error) {
+	userZone string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
 	var pathZone string
-	var err error
 
 	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
 		return false, err
@@ -196,7 +223,7 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 		}
 
 		if effectiveUserZone == pathZone &&
-			ac.UserName == PublicUser &&
+			ac.UserName == IRODSPublicUser &&
 			ac.AccessLevel == types.IRODSAccessLevelReadObject {
 			logger.Trace().
 				Str("path", rodsPath).
@@ -217,21 +244,21 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 	account *types.IRODSAccount, rodsPath string) {
 
 	// TODO: filesystem is thread safe, so it can be shared across requests
-	filesystem, err := fs.NewFileSystemWithDefault(account, AppName)
-	if err != nil {
+	var rodsFs *fs.FileSystem
+	var err error
+	if rodsFs, err = fs.NewFileSystemWithDefault(account, AppName); err != nil {
 		logger.Err(err).Msg("Failed to create an iRODS file system")
 		writeErrorResponse(logger, w, http.StatusInternalServerError)
 		return
 	}
 
-	defer filesystem.Release()
+	defer rodsFs.Release()
 
 	// Don't use filesystem.ExistsFile(objPath) here because it will return false if the
 	// file _does_ exist on the iRODS server, but the server is down or unreachable.
 	//
 	// filesystem.StatFile(objPath) is better because we can check for the error type.
-	_, err = filesystem.StatFile(rodsPath)
-	if err != nil {
+	if _, err = rodsFs.StatFile(rodsPath); err != nil {
 		if types.IsAuthError(err) {
 			logger.Err(err).
 				Str("path", rodsPath).
@@ -252,15 +279,15 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 	}
 
 	zone := account.ClientZone
-	publicReadable, err := isPublicReadable(logger, filesystem, zone, rodsPath)
-	if err != nil {
+
+	var publicReadable bool
+	if publicReadable, err = isPublicReadable(logger, rodsFs, zone, rodsPath); err != nil {
 		logger.Err(err).
 			Str("path", rodsPath).
 			Msg("Failed to check public read access")
 		writeErrorResponse(logger, w, http.StatusInternalServerError)
 		return
 	}
-
 	if !publicReadable {
 		logger.Info().
 			Str("path", rodsPath).
@@ -269,8 +296,8 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	fh, err := filesystem.OpenFile(rodsPath, "", "r")
-	if err != nil {
+	var fh *fs.FileHandle
+	if fh, err = rodsFs.OpenFile(rodsPath, "", "r"); err != nil {
 		logger.Err(err).
 			Str("path", rodsPath).
 			Msg("Failed to open file")
@@ -279,8 +306,8 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 	}
 
 	defer func(fh *fs.FileHandle) {
-		if ferr := fh.Close(); ferr != nil {
-			logger.Err(ferr).
+		if err = fh.Close(); err != nil {
+			logger.Err(err).
 				Str("path", rodsPath).
 				Msg("Failed to close file handle")
 		}
@@ -297,23 +324,22 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 // findItems runs a metadata query against iRODS to find any items that have metadata
 // with the key sqyrrl::index and value 1. The items are grouped by the value of the
 // metadata.
-func findItems(filesystem *fs.FileSystem) ([]Item, error) {
-	entries, err := filesystem.SearchByMeta(IndexAttr, IndexValue)
-	if err != nil {
+func findItems(filesystem *fs.FileSystem) (items []Item, err error) { // NRV
+	filesystem.ClearCache() // Clears all caches (entries, metadata, ACLs)
+
+	var entries []*fs.Entry
+	if entries, err = filesystem.SearchByMeta(IndexAttr, IndexValue); err != nil {
 		return nil, err
 	}
 
-	filesystem.ClearCache()
-
-	var items []Item
 	for _, entry := range entries {
-		acl, err := filesystem.ListACLs(entry.Path)
-		if err != nil {
+		var acl []*types.IRODSAccess
+		if acl, err = filesystem.ListACLs(entry.Path); err != nil {
 			return nil, err
 		}
 
-		metadata, err := filesystem.ListMetadata(entry.Path)
-		if err != nil {
+		var metadata []*types.IRODSMeta
+		if metadata, err = filesystem.ListMetadata(entry.Path); err != nil {
 			return nil, err
 		}
 

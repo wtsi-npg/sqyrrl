@@ -33,22 +33,24 @@ const (
 )
 
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
-	logRequest := AddRequestLogger(server.logger)
 	correlate := AddCorrelationID(server.logger)
+	logRequest := AddRequestLogger(server.logger)
+	sanitiseURL := SanitiseRequestURL(server.logger)
 
 	getStatic := http.StripPrefix(EndPointStatic, HandleStaticContent(server.logger))
 	getObject := http.StripPrefix(EndpointAPI, HandleIRODSGet(server.logger, server.account))
 
-	// The home page is currently a placeholder static page showing the version
-	//
-	// Any requests relative to the root are redirected to the API endpoint
+	// The root endpoint hosts a home page. Any requests relative to it are redirected
+	// to the API endpoint
 	mux.Handle("GET "+EndpointRoot,
-		correlate(logRequest(HandleHomePage(server.logger, server.index))))
+		sanitiseURL(correlate(logRequest(HandleHomePage(server.logger, server.index)))))
 
+	// The static endpoint is used to serve static files from a filesystem embedded in
+	// the binary
 	mux.Handle("GET "+EndPointStatic,
-		correlate(logRequest(getStatic)))
+		sanitiseURL(correlate(logRequest(getStatic))))
 
 	// The API endpoint is used to access files in iRODS
 	mux.Handle("GET "+EndpointAPI,
-		correlate(logRequest(getObject)))
+		sanitiseURL(correlate(logRequest(getObject))))
 }

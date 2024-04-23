@@ -39,12 +39,14 @@ var (
 	suiteName   = "Sqyrrl Server Test Suite"
 	suiteLogger zerolog.Logger
 
+	projectDir, workDir string
+
 	iRODSEnvFile string
 	account      *types.IRODSAccount
 	irodsFS      *fs.FileSystem
 )
 
-func TestServer(t *testing.T) {
+func TestSuite(t *testing.T) {
 	writer := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
 	suiteLogger = zerolog.New(writer).With().Timestamp().Logger().Level(zerolog.InfoLevel)
 
@@ -55,6 +57,11 @@ func TestServer(t *testing.T) {
 // Set up the iRODS environment and create a new iRODS filesystem
 var _ = BeforeSuite(func() {
 	var err error
+
+	workDir, err = os.Getwd()
+	Expect(err).NotTo(HaveOccurred())
+
+	projectDir = filepath.Join("..", workDir)
 
 	iRODSEnvFile = server.IRODSEnvFilePath()
 	manager, err := server.NewICommandsEnvironmentManager()
@@ -74,19 +81,6 @@ var _ = BeforeSuite(func() {
 
 	irodsFS, err = fs.NewFileSystemWithDefault(account, suiteName)
 	Expect(err).NotTo(HaveOccurred())
-
-	dir, err := os.Getwd()
-	Expect(err).NotTo(HaveOccurred())
-
-	defer func(dir string) {
-		err := os.Chdir(dir)
-		if err != nil {
-			suiteLogger.Err(err).
-				Str("path", dir).
-				Msg("Failed to chdir back to the original working directory after " +
-					"setting up HTML templates")
-		}
-	}(dir)
 })
 
 // Release the iRODS filesystem
