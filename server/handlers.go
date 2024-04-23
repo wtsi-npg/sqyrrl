@@ -18,16 +18,29 @@
 package server
 
 import (
+	"context"
+	"github.com/rs/xid"
+	"github.com/rs/zerolog/hlog"
 	"io/fs"
 	"net/http"
 	"path"
+	"time"
 
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/rs/zerolog"
 )
 
+// HandlerChain is a function that takes an http.Handler and returns a new http.Handler
+// wrapping the input handler. Each handler in the chain should process the request in
+// some way, and then call the next handler. Ideally, the functionality of each handler
+// should be orthogonal to the others.
+//
+// This is sometimes called "middleware" in Go. I haven't used that term here because it
+// already has an established meaning in the context of operating systems and networking.
+type HandlerChain func(http.Handler) http.Handler
+
 // HandleHomePage is a handler for the static home page.
-func HandleHomePage(logger zerolog.Logger) http.Handler {
+func HandleHomePage(logger zerolog.Logger, index *ItemIndex) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Trace().Msg("HomeHandler called")
 
@@ -42,12 +55,23 @@ func HandleHomePage(logger zerolog.Logger) http.Handler {
 			http.Redirect(w, r, redirect, http.StatusPermanentRedirect)
 		}
 
-		type customData struct {
-			URL     string
-			Version string
+		type pageData struct {
+			Version          string
+			Categories       []string
+			CategorisedItems map[string][]Item
 		}
 
-		data := customData{Version: Version, URL: r.URL.RequestURI()}
+		catItems := make(map[string][]Item)
+		cats := index.Categories()
+		for _, cat := range cats {
+			catItems[cat] = index.ItemsInCategory(cat)
+		}
+
+		data := pageData{
+			Version:          Version,
+			Categories:       cats,
+			CategorisedItems: catItems,
+		}
 
 		tplName := "home.gohtml"
 		if err := templates.ExecuteTemplate(w, tplName, data); err != nil {
@@ -59,6 +83,8 @@ func HandleHomePage(logger zerolog.Logger) http.Handler {
 }
 
 func HandleStaticContent(logger zerolog.Logger) http.Handler {
+	logger.Trace().Msg("StaticContentHandler called")
+
 	sub := func(dir fs.FS, name string) fs.FS {
 		f, err := fs.Sub(dir, name)
 		if err != nil {
@@ -99,4 +125,81 @@ func HandleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Han
 
 		getFileRange(rodsLogger, w, r, account, sanPath)
 	})
+}
+
+// AddRequestLogger adds an HTTP request suiteLogger to the handler chain.
+//
+// If a correlation ID is present in the request context, it is logged.
+func AddRequestLogger(logger zerolog.Logger) HandlerChain {
+	return func(next http.Handler) http.Handler {
+		lh := hlog.NewHandler(logger)
+
+		ah := hlog.AccessHandler(func(r *http.Request, status, size int, dur time.Duration) {
+			var corrID string
+			if val := r.Context().Value(correlationIDKey); val != nil {
+				corrID = val.(string)
+			}
+
+			hlog.FromRequest(r).Info().
+				Str("correlation_id", corrID).
+				Dur("duration", dur).
+				Int("size", size).
+				Int("status", status).
+				Str("method", r.Method).
+				Str("url", r.URL.RequestURI()).
+				Str("remote_addr", r.RemoteAddr).
+				Str("forwarded_for", r.Header.Get(HeaderForwardedFor)).
+				Str("user_agent", r.UserAgent()).
+				Msg("Request served")
+		})
+		return lh(ah(next))
+	}
+}
+
+// AddCorrelationID adds a correlation ID to the request context and response headers.
+func AddCorrelationID(logger zerolog.Logger) HandlerChain {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var corrID string
+			if corrID = r.Header.Get(HeaderCorrelationID); corrID == "" {
+				corrID = xid.New().String()
+				logger.Trace().
+					Str("correlation_id", corrID).
+					Str("url", r.URL.RequestURI()).
+					Msg("Creating a new correlation ID")
+				w.Header().Add(HeaderCorrelationID, corrID)
+			} else {
+				logger.Trace().
+					Str("correlation_id", corrID).
+					Str("url", r.URL.RequestURI()).
+					Msg("Using correlation ID from request")
+			}
+
+			ctx := context.WithValue(r.Context(), correlationIDKey, corrID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func SanitiseRequestURL(logger zerolog.Logger) HandlerChain {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// URLs are already cleaned by the Go ServeMux. This is in addition
+
+			dirtyPath := r.URL.Path
+			sanPath := userInputPolicy.Sanitize(dirtyPath)
+			if sanPath != dirtyPath {
+				logger.Warn().
+					Str("sanitised_path", sanPath).
+					Str("dirty_path", dirtyPath).
+					Msg("Path was sanitised")
+			}
+
+			url := r.URL
+			url.Path = sanPath
+			r.URL = url
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

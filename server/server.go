@@ -22,55 +22,51 @@ import (
 	"embed"
 	"errors"
 	"html/template"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	_ "crypto/tls" // Leave this to ensure that the TLS package is linked
 
+	"github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/microcosm-cc/bluemonday"
-	"github.com/rs/xid"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/hlog"
 )
 
 type ContextKey string
 
-// HandlerChain is a function that takes an http.Handler and returns an new http.Handler
-// wrapping the input handler. Each handler in the chain should process the request in
-// some way, and then call the next handler. Ideally, the functionality of each handler
-// should be orthogonal to the others.
-//
-// This is sometimes called "middleware" in Go. I haven't used that term here because it
-// already has an established meaning in the context of operating systems and networking.
-type HandlerChain func(http.Handler) http.Handler
-
 // SqyrrlServer is an HTTP server which contains an embedded iRODS client.
 type SqyrrlServer struct {
 	http.Server
-	context context.Context                        // Context for clean shutdown
-	logger  zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
-	manager *icommands.ICommandsEnvironmentManager // iRODS manager for the embedded client
-	account *types.IRODSAccount                    // iRODS account for the embedded client
+	context       context.Context                        // Context for clean shutdown
+	logger        zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
+	manager       *icommands.ICommandsEnvironmentManager // iRODS manager for the embedded client
+	account       *types.IRODSAccount                    // iRODS account for the embedded client
+	indexInterval time.Duration                          // Interval for indexing items
+	index         *ItemIndex                             // ItemIndex of items in the iRODS server
 }
 
 type Config struct {
-	Host         string
-	Port         int
-	EnvFilePath  string // Path to the iRODS environment file
-	CertFilePath string
-	KeyFilePath  string
+	Host          string
+	Port          string
+	EnvFilePath   string // Path to the iRODS environment file
+	CertFilePath  string
+	KeyFilePath   string
+	IndexInterval time.Duration
 }
 
 const AppName = "sqyrrl"
+
+const MinIndexInterval = 10 * time.Second
+const DefaultIndexInterval = 60 * time.Second
 
 const correlationIDKey = ContextKey("correlation_id")
 
@@ -106,12 +102,21 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 	if config.Host == "" {
 		return nil, errors.New("missing host")
 	}
-	if config.Port == 0 {
+	if config.Port == "" {
 		return nil, errors.New("missing port")
 	}
 	if config.CertFilePath == "" {
 		return nil,
 			errors.New("missing certificate file path")
+	}
+
+	indexInterval := config.IndexInterval
+	if indexInterval < MinIndexInterval {
+		logger.Warn().
+			Dur("interval", indexInterval).
+			Dur("min_interval", MinIndexInterval).
+			Msg("Index interval too short, using the default interval")
+		indexInterval = DefaultIndexInterval
 	}
 
 	// The sub-suiteLogger adds "hostname and" "component" field to the log entries. Further
@@ -144,7 +149,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 		return nil, err
 	}
 
-	addr := net.JoinHostPort(config.Host, strconv.Itoa(config.Port))
+	addr := net.JoinHostPort(config.Host, config.Port)
 	mux := http.NewServeMux()
 	serverCtx, cancelServer := context.WithCancel(context.Background())
 
@@ -159,8 +164,11 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (*SqyrrlServer, error
 		subLogger,
 		manager,
 		account,
+		indexInterval,
+		NewItemIndex([]Item{}),
 	}
 
+	server.setUpIndexing(serverCtx)
 	server.setUpSignalHandler(cancelServer)
 	server.addRoutes(mux)
 
@@ -196,45 +204,6 @@ func (server *SqyrrlServer) Start(certFile string, keyFile string) {
 	server.waitAndShutdown()
 }
 
-func ConfigureAndStart(logger zerolog.Logger, config Config) {
-	if config.Host == "" {
-		logger.Error().Msg("Missing host component of address to listen on")
-		return
-	}
-	if config.Port == 0 {
-		logger.Error().Msg("Missing port component of address to listen on")
-		return
-	}
-	if config.CertFilePath == "" {
-		logger.Error().Msg("Missing certificate file path")
-		return
-	}
-	if config.KeyFilePath == "" {
-		logger.Error().Msg("Missing key file path")
-		return
-	}
-	if config.EnvFilePath == "" {
-		logger.Error().Msg("Missing iRODS environment file path")
-		return
-	}
-
-	envFilePath, err := util.ExpandHomeDir(config.EnvFilePath)
-	if err != nil {
-		logger.Err(err).Str("path", config.EnvFilePath).
-			Msg("Failed to expand the iRODS environment file path")
-		return
-	}
-	config.EnvFilePath = envFilePath
-
-	server, err := NewSqyrrlServer(logger, config)
-	if err != nil {
-		logger.Err(err).Msg("Failed to create a server")
-		return
-	}
-
-	server.Start(config.CertFilePath, config.KeyFilePath)
-}
-
 func (server *SqyrrlServer) setUpSignalHandler(cancel context.CancelFunc) {
 	logger := server.logger
 
@@ -258,6 +227,39 @@ func (server *SqyrrlServer) setUpSignalHandler(cancel context.CancelFunc) {
 	}()
 }
 
+func (server *SqyrrlServer) setUpIndexing(ctx context.Context) {
+	logger := server.logger
+
+	filesystem, err := fs.NewFileSystemWithDefault(server.account, AppName)
+	if err != nil {
+		panic(err)
+	}
+
+	// Query the iRODS server for items at regular intervals
+	items := queryAtIntervalsWithBackoff(logger, ctx, server.indexInterval,
+		func() ([]Item, error) {
+			return findItems(filesystem)
+		})
+
+	logger.Info().Dur("interval", server.indexInterval).Msg("Indexing started")
+
+	// Create an index of items
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info().Msg("Indexing cancelled")
+				return
+			case items := <-items:
+				server.index.items = items
+				logger.Info().
+					Str("index", server.index.String()).
+					Msg("Updated index")
+			}
+		}
+	}()
+}
+
 func (server *SqyrrlServer) waitAndShutdown() {
 	logger := server.logger
 
@@ -270,58 +272,47 @@ func (server *SqyrrlServer) waitAndShutdown() {
 	logger.Info().Msg("Server shutdown cleanly")
 }
 
-// AddRequestLogger adds an HTTP request suiteLogger to the handler chain.
-//
-// If a correlation ID is present in the request context, it is logged.
-func AddRequestLogger(logger zerolog.Logger) HandlerChain {
-	return func(next http.Handler) http.Handler {
-		lh := hlog.NewHandler(logger)
-
-		ah := hlog.AccessHandler(func(r *http.Request, status, size int, dur time.Duration) {
-			var corrID string
-			if val := r.Context().Value(correlationIDKey); val != nil {
-				corrID = val.(string)
-			}
-
-			hlog.FromRequest(r).Info().
-				Str("correlation_id", corrID).
-				Dur("duration", dur).
-				Int("size", size).
-				Int("status", status).
-				Str("method", r.Method).
-				Str("url", r.URL.RequestURI()).
-				Str("remote_addr", r.RemoteAddr).
-				Str("forwarded_for", r.Header.Get(HeaderForwardedFor)).
-				Str("user_agent", r.UserAgent()).
-				Msg("Request served")
-		})
-		return lh(ah(next))
+func ConfigureAndStart(logger zerolog.Logger, config Config) {
+	if config.Host == "" {
+		logger.Error().Msg("Missing host component of address to listen on")
+		return
 	}
-}
-
-// AddCorrelationID adds a correlation ID to the request context and response headers.
-func AddCorrelationID(logger zerolog.Logger) HandlerChain {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var corrID string
-			if corrID = r.Header.Get(HeaderCorrelationID); corrID == "" {
-				corrID = xid.New().String()
-				logger.Trace().
-					Str("correlation_id", corrID).
-					Str("url", r.URL.RequestURI()).
-					Msg("Creating a new correlation ID")
-				w.Header().Add(HeaderCorrelationID, corrID)
-			} else {
-				logger.Trace().
-					Str("correlation_id", corrID).
-					Str("url", r.URL.RequestURI()).
-					Msg("Using correlation ID from request")
-			}
-
-			ctx := context.WithValue(r.Context(), correlationIDKey, corrID)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+	if config.Port == "" {
+		logger.Error().Msg("Missing port component of address to listen on")
+		return
 	}
+	if config.CertFilePath == "" {
+		logger.Error().Msg("Missing certificate file path")
+		return
+	}
+	if config.KeyFilePath == "" {
+		logger.Error().Msg("Missing key file path")
+		return
+	}
+	if config.EnvFilePath == "" {
+		logger.Error().Msg("Missing iRODS environment file path")
+		return
+	}
+	if !(config.IndexInterval > 0) {
+		logger.Error().Msg("Missing index interval")
+		return
+	}
+
+	envFilePath, err := util.ExpandHomeDir(config.EnvFilePath)
+	if err != nil {
+		logger.Err(err).Str("path", config.EnvFilePath).
+			Msg("Failed to expand the iRODS environment file path")
+		return
+	}
+	config.EnvFilePath = envFilePath
+
+	server, err := NewSqyrrlServer(logger, config)
+	if err != nil {
+		logger.Err(err).Msg("Failed to create a server")
+		return
+	}
+
+	server.Start(config.CertFilePath, config.KeyFilePath)
 }
 
 func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int, message ...string) {
@@ -339,4 +330,64 @@ func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int, 
 		Msg("Sending HTTP error")
 
 	http.Error(w, msg, code)
+}
+
+// queryAtIntervalsWithBackoff runs a query at regular intervals until the context is
+// cancelled.
+//
+// If the query takes longer than the interval, the next query is delayed by
+// the time taken by the previous query. If the query takes less time than the interval
+// by a certain factor, the interval is shrunk to that value, but not below the original.
+func queryAtIntervalsWithBackoff(logger zerolog.Logger, ctx context.Context,
+	interval time.Duration, queryFn func() ([]Item, error)) chan []Item {
+	items := make(chan []Item)
+
+	origInterval := interval
+	shrinkFactor := 0.7
+	findTick := time.NewTicker(interval)
+
+	go func() {
+		defer close(items)
+		defer findTick.Stop()
+
+		for {
+			select {
+			case <-findTick.C:
+				start := time.Now()
+				x, err := queryFn()
+				if err != nil {
+					logger.Err(err).Msg("Query failed")
+				} else {
+					items <- x
+				}
+
+				elapsed := time.Since(start)
+
+				// If the query took longer than the interval, back off by making the next
+				// query wait for the extra amount of time in excess of the internal that
+				// the last query took.
+				if elapsed > interval {
+					backoff := time.NewTimer(elapsed - interval)
+					select {
+					case <-backoff.C:
+						// Continue to the next iteration
+					case <-ctx.Done():
+						logger.Info().Msg("Query cancelled")
+						return
+					}
+				}
+				// If the query took less time than the interval by the shrink factor,
+				// shrink the interval to that value, but not below the original value.
+				threshold := interval.Seconds() * shrinkFactor
+				if elapsed.Seconds() < threshold {
+					interval = time.Duration(math.Max(threshold, origInterval.Seconds()))
+				}
+			case <-ctx.Done():
+				logger.Info().Msg("Query cancelled")
+				return
+			}
+		}
+	}()
+
+	return items
 }

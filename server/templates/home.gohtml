@@ -1,8 +1,85 @@
 {{template "header" .}}
 
-<div id="content">
-    <h2>Sqyrrl Homepage</h2>
+{{ $categories := .Categories }}
+{{ $items := .CategorisedItems }}
 
-    <h3>Application version: {{.Version}}</h3>
+<div class="container">
+    <div class="top-left-cell"><img src="/static/favicon-32x32.png" alt="Sqyrrl"></div>
+
+    <div class="top-cell"><h2>Sqyrrl</h2></div>
+
+    <div class="top-right-cell">Version: {{ .Version}}</div>
+
+    <div class="main-cell">
+        <hr/>
+        <h3>Categorised, tagged items</h3>
+
+        {{ range $category := $categories }}
+            {{ if $category }}
+                <h3>{{$category}}</h3>
+
+                <div class="url-grid">
+                    {{ $citems := index $items $category }}
+                    {{ range $citem := $citems }}
+                        <div class="url-cell"><a href="{{ $citem.Path }}">{{ $citem.Path }}</a></div>
+                        <div class="info-cell">
+                            <div class="info-item">{{ $citem.SizeString }}</div>
+                        </div>
+                        <div class="acl-cell">
+                            <div class="acl-bag">
+                                {{ with $citem }}
+                                    {{ range $av := .ACLStrings }}
+                                        <div class="acl-item">{{ $av }}</div>
+                                    {{ end }}
+                                {{ end }}
+                            </div>
+                        </div>
+                        <div class="metadata-cell">
+                            <div class="metadata-bag">
+                                {{ with $citem }}
+                                    {{ range $av := .MetadataStrings }}
+                                        <div class="metadata-item">{{ $av }}</div>
+                                    {{ end }}
+                                {{ end }}
+                            </div>
+                        </div>
+
+                    {{ end }}
+                </div>
+            {{ end }}
+        {{ end }}
+
+        <hr/>
+        <h3>Uncategorised, tagged items</h3>
+
+        <div class="url-grid">
+            {{ $citems := index $items "" }}
+            {{ range $citem := $citems }}
+                <div class="url-cell"><a href="{{ $citem.Path }}">{{ $citem.Path }}</a></div>
+                <div class="info-cell">
+                    <div class="info-item">{{ $citem.SizeString }}</div>
+                </div>
+                <div class="acl-cell">
+                    <div class="acl-bag">
+                        {{ with $citem }}
+                            {{ range $av := .ACLStrings }}
+                                <div class="acl-item">{{ $av }}</div>
+                            {{ end }}
+                        {{ end }}
+                    </div>
+                </div>
+                <div class="metadata-cell">
+                    <div class="metadata-bag">
+                        {{ with $citem }}
+                            {{ range $av := .MetadataStrings }}
+                                <div class="metadata-item">{{ $av }}</div>
+                            {{ end }}
+                        {{ end }}
+                    </div>
+                </div>
+
+            {{ end }}
+        </div>
+    </div>
 </div>
 {{template "footer"}}
