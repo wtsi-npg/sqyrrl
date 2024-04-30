@@ -115,10 +115,10 @@ func printHelp(cmd *cobra.Command, args []string) {
 	}
 }
 
-func startServer(cmd *cobra.Command, args []string) {
+func startServer(cmd *cobra.Command, args []string) error {
 	logger := configureRootLogger(&cliFlagsSelected)
 
-	server.ConfigureAndStart(logger, server.Config{
+	return server.ConfigureAndStart(logger, server.Config{
 		Host:          cliFlagsSelected.host,
 		Port:          cliFlagsSelected.port,
 		CertFilePath:  cliFlagsSelected.certFilePath,
@@ -145,7 +145,7 @@ func CLI() {
 		Use:   "start",
 		Short: "Configure and start the server",
 		Long:  "Configure and start the server.",
-		Run:   startServer,
+		RunE:  startServer,
 	}
 	startCmd.Flags().StringVar(&cliFlagsSelected.host,
 		"host", "localhost",
@@ -169,7 +169,6 @@ func CLI() {
 	rootCmd.AddCommand(startCmd)
 
 	if err := rootCmd.Execute(); err != nil {
-		mainLogger.Err(err).Msg("command failed")
 		os.Exit(1)
 	}
 }

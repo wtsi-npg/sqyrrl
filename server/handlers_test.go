@@ -124,7 +124,7 @@ var _ = Describe("iRODS Get Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				err = fs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
-					server.PublicUser, testZone, false)
+					server.IRODSPublicUser, testZone, false)
 				Expect(err).NotTo(HaveOccurred())
 
 				acl, err = irodsFS.ListFileACLsWithGroupUsers(remotePath)
@@ -134,14 +134,14 @@ var _ = Describe("iRODS Get Handler", func() {
 				for _, ac := range acl {
 					suiteLogger.Info().
 						Str("user", ac.UserName).
-						Str("expected_user", server.PublicUser).
+						Str("expected_user", server.IRODSPublicUser).
 						Str("zone", ac.UserZone).
 						Str("expected_zone", testZone).
 						Str("access", ac.AccessLevel.ChmodString()).
 						Str("expected_access", types.IRODSAccessLevelReadObject.ChmodString()).
 						Msg("ACL")
 
-					if ac.UserName == server.PublicUser &&
+					if ac.UserName == server.IRODSPublicUser &&
 						ac.UserZone == testZone &&
 						ac.AccessLevel == types.IRODSAccessLevelReadObject {
 						publicAccess = true

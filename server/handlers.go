@@ -106,24 +106,16 @@ func HandleIRODSGet(logger zerolog.Logger, account *types.IRODSAccount) http.Han
 			corrID = val.(string)
 		}
 
-		dirtyPath := r.URL.Path
-		sanPath := userInputPolicy.Sanitize(dirtyPath)
-		if sanPath != dirtyPath {
-			logger.Warn().
-				Str("correlation_id", corrID).
-				Str("sanitised_path", sanPath).
-				Str("dirty_path", dirtyPath).
-				Msg("Path was sanitised")
-		}
-
 		rodsLogger := logger.With().
 			Str("correlation_id", corrID).
 			Str("irods", "get").Logger()
 
-		sanPath = path.Clean("/" + sanPath)
-		logger.Debug().Str("path", sanPath).Msg("Getting iRODS data object")
+		// The path should be clean as it has passed through the ServeMux, but since we're
+		// doing a path.Join, clean it before passing it to iRODS
+		objPath := path.Clean(path.Join("/", r.URL.Path))
+		logger.Debug().Str("path", objPath).Msg("Getting iRODS data object")
 
-		getFileRange(rodsLogger, w, r, account, sanPath)
+		getFileRange(rodsLogger, w, r, account, objPath)
 	})
 }
 
@@ -181,11 +173,14 @@ func AddCorrelationID(logger zerolog.Logger) HandlerChain {
 	}
 }
 
+// SanitiseRequestURL sanitises the URL path in the request. All requests pass through
+// this as a first step.
 func SanitiseRequestURL(logger zerolog.Logger) HandlerChain {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// URLs are already cleaned by the Go ServeMux. This is in addition
+			logger.Trace().Str("path", r.URL.Path).Msg("Sanitising URL path")
 
+			// URLs are already cleaned by the Go ServeMux. This is in addition
 			dirtyPath := r.URL.Path
 			sanPath := userInputPolicy.Sanitize(dirtyPath)
 			if sanPath != dirtyPath {

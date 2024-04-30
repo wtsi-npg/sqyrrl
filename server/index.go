@@ -22,6 +22,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/cyverse/go-irodsclient/irods/types"
 )
@@ -33,10 +34,11 @@ import (
 // has a category, which is used to group items together. The functions associated with
 // the index allow the web interface to display the items in a structured way.
 type ItemIndex struct {
+	sync.RWMutex
 	items []Item
 }
 
-// Item represents a item in the index.
+// Item represents an indexed iRODS path.
 type Item struct {
 	Path     string // The iRODS path of the item.
 	Size     int64  // The size of the item in bytes.
@@ -44,12 +46,24 @@ type Item struct {
 	ACL      []*types.IRODSAccess
 }
 
+// NewItemIndex creates a new item index with the given items.
 func NewItemIndex(items []Item) *ItemIndex {
 	return &ItemIndex{items: items}
 }
 
+// SetItems sets the items in the index, replacing the existing items.
+func (index *ItemIndex) SetItems(items []Item) {
+	index.Lock()
+	defer index.Unlock()
+
+	index.items = items
+}
+
 // Categories returns a sorted list of all the categories in the index.
 func (index *ItemIndex) Categories() []string {
+	index.RLock()
+	defer index.RUnlock()
+
 	var categorySet = make(map[string]struct{})
 	for _, item := range index.items {
 		categorySet[item.Category()] = struct{}{}
@@ -69,6 +83,9 @@ func (index *ItemIndex) Categories() []string {
 // ItemsInCategory returns a sorted list of all the items in the index that are in the
 // given category.
 func (index *ItemIndex) ItemsInCategory(cat string) []Item {
+	index.RLock()
+	defer index.RUnlock()
+
 	var items []Item
 	for _, item := range index.items {
 		if item.Category() == cat {
@@ -83,6 +100,9 @@ func (index *ItemIndex) ItemsInCategory(cat string) []Item {
 }
 
 func (index *ItemIndex) String() string {
+	index.RLock()
+	defer index.RUnlock()
+
 	var sb strings.Builder
 	sb.WriteString("<ItemIndex")
 
@@ -104,6 +124,9 @@ func (index *ItemIndex) String() string {
 	return sb.String()
 }
 
+// Category returns the category of the item, which is an arbitrary string that can be
+// used to group items together. The category value is extracted from the metadata of
+// the path in iRODS, so to change categories, the iRODS metadata must be updated.
 func (item *Item) Category() string {
 	var category string
 	for _, meta := range item.Metadata {
@@ -115,6 +138,7 @@ func (item *Item) Category() string {
 	return category
 }
 
+// SizeString returns a human-readable string representing the size of the in iRODS.
 func (item *Item) SizeString() string {
 	if item.Size < 1024 {
 		return fmt.Sprintf("%d B", item.Size)
