@@ -18,7 +18,6 @@
 package server
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -70,19 +69,57 @@ func IRODSEnvFilePath() string {
 // InitIRODS initialises the iRODS environment by creating a populated auth file if it
 // does not already exist. This avoids the need to have `iinit` present on the server
 // host.
-func InitIRODS(logger zerolog.Logger, authFilePath string, password string) error {
-	logger.Info().
-		Str("path", authFilePath).
-		Msg("Writing an iRODS auth file")
-	return icommands.EncodePasswordFile(authFilePath, password, os.Getuid())
+func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentManager) (err error) {
+	authFilePath := manager.GetPasswordFilePath()
+	if _, err = os.Stat(authFilePath); err != nil && os.IsNotExist(err) {
+		logger.Info().
+			Str("path", authFilePath).
+			Msg("No iRODS auth file present; writing one now")
+		return icommands.EncodePasswordFile(authFilePath, manager.Password, os.Getuid())
+	}
+	return err
 }
 
 // NewICommandsEnvironmentManager creates a new environment manager instance.
 //
-// This function is just for aesthetic purposes, to fit with the convention of naming
-// functions creating something with "New".
-func NewICommandsEnvironmentManager() (*icommands.ICommandsEnvironmentManager, error) {
-	return icommands.CreateIcommandsEnvironmentManager()
+// This function creates a manager and sets the iRODS environment file path from the
+// shell environment. If an iRODS auth file is present, the password is read from it.
+// Otherwise, the password is read from the shell environment.
+func NewICommandsEnvironmentManager() (manager *icommands.ICommandsEnvironmentManager, err error) {
+	if manager, err = icommands.CreateIcommandsEnvironmentManager(); err != nil {
+		return nil, err
+	}
+	if err = manager.SetEnvironmentFilePath(IRODSEnvFilePath()); err != nil {
+		return nil, err
+	}
+
+	authFilePath := manager.GetPasswordFilePath()
+
+	// An existing auth file takes precedence over the environment variable
+	if _, err = os.Stat(authFilePath); err != nil && os.IsNotExist(err) {
+		envPassword, ok := os.LookupEnv(IRODSPasswordEnvVar)
+		if !ok {
+			return nil, fmt.Errorf("%s environment variable was not set: %w",
+				IRODSPasswordEnvVar, ErrMissingArgument)
+		}
+		if envPassword == "" {
+			return nil, fmt.Errorf("%s environment variable was empty: %w",
+				IRODSPasswordEnvVar, ErrInvalidArgument)
+		}
+
+		manager.Password = envPassword
+	} else {
+		filePassword, perr := icommands.DecodePasswordFile(authFilePath, os.Getuid())
+		if perr != nil {
+			return nil, perr
+		}
+
+		manager.Password = filePassword
+	}
+
+	// manager.Password is propagated to the iRODS account
+
+	return manager, nil
 }
 
 // NewIRODSAccount returns an iRODS account instance using the iRODS environment for
@@ -123,35 +160,11 @@ func NewIRODSAccount(logger zerolog.Logger,
 		return nil, err
 	}
 
-	authFilePath := manager.GetPasswordFilePath()
-	if _, err = os.Stat(authFilePath); err != nil && errors.Is(err, os.ErrNotExist) {
-		logger.Info().
-			Str("path", authFilePath).
-			Msg("iRODS auth file does not exist; using the iRODS password environment variable")
-
-		password, ok := os.LookupEnv(IRODSPasswordEnvVar)
-		if !ok {
-			logger.Error().
-				Str("variable", IRODSPasswordEnvVar).
-				Msg("Environment variable not set")
-			return nil, fmt.Errorf("%s environment variable was not set: %w",
-				IRODSPasswordEnvVar, ErrMissingArgument)
-		}
-		if password == "" {
-			logger.Error().
-				Str("variable", IRODSPasswordEnvVar).
-				Msg("Environment variable empty")
-			return nil, fmt.Errorf("%s environment variable was empty: %w",
-				IRODSPasswordEnvVar, ErrInvalidArgument)
-		}
-		account.Password = password
-
-		if err = InitIRODS(logger, authFilePath, password); err != nil {
-			logger.Err(err).
-				Str("path", authFilePath).
-				Msg("Failed to initialise iRODS")
-			return nil, err
-		}
+	if err = InitIRODS(logger, manager); err != nil {
+		logger.Err(err).
+			Str("path", manager.GetPasswordFilePath()).
+			Msg("Failed to initialise iRODS")
+		return nil, err
 	}
 
 	logger.Info().

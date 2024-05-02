@@ -66,9 +66,8 @@ the iRODS auth file itself, without requiring `iinit` to be used.
 
 ## Running in a container
 
-When running Sqyrrl in a Docker container, configuration files (iRODS environment file, SSL
-certificates) should be mounted into the container and the password should be supplied using
-the environment variable `IRODS_PASSWORD`.
+When running Sqyrrl in a Docker container, configuration files (iRODS environment file, any
+existing auth file, SSL certificates) should be mounted into the container.
 
 The docker-compose.yml file in the repository contains an example configuration for running
 Sqyrrl in a container.
@@ -76,13 +75,16 @@ Sqyrrl in a container.
 ## Tagging iRODS data objects for display on the home page
 
 This is an experimental feature. It allows the user to tag iRODS data objects with metadata so
-that  they will be displayed in the Sqyrrl home page for convenience. To tag an iRODS data object,
-add a  metadata attribute `sqyrrl:index` with value `1`. Data objects may be  grouped together
-on the page,  under a title, known as a "category". To specify a category for a data object,
+that they will be displayed in the Sqyrrl home page for convenience. To tag an iRODS data object,
+add a metadata attribute `sqyrrl:index` with value `1`. Data objects may be  grouped together
+on the page, under a title, known as a "category". To specify a category for a data object,
 add a metadata attribute `sqyrrl:category` with the  value being the category name.
 
 The home page will be re-indexed at the interval specified by the `--index-interval` flag. The
 home page auto-refreshes every 30 seconds.
+
+N.B. As go-irodsclient does not support metadata queries across federated zones, this feature
+is limited to data objects in the same zone as the iRODS user.
 
 ## Dependencies
 

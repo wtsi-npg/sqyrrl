@@ -18,6 +18,7 @@
 package server_test
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -39,11 +40,12 @@ var (
 	suiteName   = "Sqyrrl Server Test Suite"
 	suiteLogger zerolog.Logger
 
-	projectDir, workDir string
+	account *types.IRODSAccount
+	irodsFS *fs.FileSystem
 
-	iRODSEnvFile string
-	account      *types.IRODSAccount
-	irodsFS      *fs.FileSystem
+	iRODSEnvFilePath  = "testdata/config/test_irods_environment.json"
+	iRODSAuthFilePath = "testdata/config/test_auth_file"
+	iRODSPassword     = "irods"
 )
 
 func TestSuite(t *testing.T) {
@@ -58,22 +60,24 @@ func TestSuite(t *testing.T) {
 var _ = BeforeSuite(func() {
 	var err error
 
-	workDir, err = os.Getwd()
+	err = os.Setenv(server.IRODSPasswordEnvVar, iRODSPassword)
 	Expect(err).NotTo(HaveOccurred())
 
-	projectDir = filepath.Join("..", workDir)
+	err = os.Setenv(server.IRODSEnvFileEnvVar, iRODSEnvFilePath)
+	Expect(err).NotTo(HaveOccurred())
 
-	iRODSEnvFile = server.IRODSEnvFilePath()
+	// Ensure that tests start without an auth file present
+	err = os.Remove(iRODSAuthFilePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		Expect(err).NotTo(HaveOccurred())
+	}
+
 	manager, err := server.NewICommandsEnvironmentManager()
 	Expect(err).NotTo(HaveOccurred())
+	Expect(manager.GetEnvironmentFilePath()).To(Equal(iRODSEnvFilePath))
+	Expect(manager.Password).To(Equal(iRODSPassword))
 
-	err = manager.SetEnvironmentFilePath(iRODSEnvFile)
-	Expect(err).NotTo(HaveOccurred())
-
-	err = os.Setenv(server.IRODSPasswordEnvVar, "irods")
-	Expect(err).NotTo(HaveOccurred())
-	authFilePath := manager.GetPasswordFilePath()
-	err = server.InitIRODS(suiteLogger, authFilePath, os.Getenv(server.IRODSPasswordEnvVar))
+	err = server.InitIRODS(suiteLogger, manager)
 	Expect(err).NotTo(HaveOccurred())
 
 	account, err = server.NewIRODSAccount(suiteLogger, manager)
@@ -86,6 +90,12 @@ var _ = BeforeSuite(func() {
 // Release the iRODS filesystem
 var _ = AfterSuite(func() {
 	irodsFS.Release()
+
+	// Clean up any auth file that may have been created
+	err := os.Remove(iRODSAuthFilePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		Expect(err).NotTo(HaveOccurred())
+	}
 })
 
 // Return a new pseudo-randomised path in iRODS
