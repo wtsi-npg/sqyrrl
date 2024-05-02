@@ -139,13 +139,6 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		return nil, err
 	}
 
-	if err = manager.SetEnvironmentFilePath(config.EnvFilePath); err != nil {
-		subLogger.Err(err).
-			Str("path", config.EnvFilePath).
-			Msg("Failed to set the iRODS environment file path")
-		return nil, err
-	}
-
 	var account *types.IRODSAccount
 	if account, err = NewIRODSAccount(subLogger, manager); err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")

@@ -5,11 +5,11 @@ services:
       container_name: irods-server
       image: "ghcr.io/wtsi-npg/ub-16.04-irods-4.2.7:latest"
       ports:
-        - "1247:1247"
-        - "20000-20199:20000-20199"
+        - "127.0.0.1:1247:1247"
+        - "127.0.0.1:20000-20199:20000-20199"
       restart: always
       healthcheck:
-        test: ["CMD", "nc", "-z", "-v", "localhost", "1247"]
+        test: ["CMD", "nc", "-z", "-v", "127.0.0.1", "1247"]
         start_period: 30s
         interval: 5s
         timeout: 10s
@@ -24,14 +24,14 @@ services:
                 "--port", "3333",
                 "--cert-file", "/app/config/localhost.crt",
                 "--key-file", "/app/config/localhost.key",
-                "--irods-env", "/app/config/irods_environment.json",
+                "--irods-env", "/app/config/app_irods_environment.json",
                 "--log-level", "trace"]
       environment:
         IRODS_PASSWORD: "irods"
       ports:
         - "3333:3333"
       volumes:
-        - ./config:/app/config
+        - ./server/testdata/config:/app/config
       depends_on:
         irods-server:
           condition: service_healthy
