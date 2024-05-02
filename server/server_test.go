@@ -28,6 +28,7 @@ var _ = Describe("Server startup and shutdown", func() {
 			Port:          port,
 			CertFilePath:  filepath.Join(configDir, "localhost.crt"),
 			KeyFilePath:   filepath.Join(configDir, "localhost.key"),
+			EnvFilePath:   filepath.Join(configDir, "test_irods_environment.json"),
 			IndexInterval: server.DefaultIndexInterval,
 		}
 	})

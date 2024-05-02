@@ -27,7 +27,7 @@ services:
                 "--irods-env", "/app/config/app_irods_environment.json",
                 "--log-level", "trace"]
       environment:
-        IRODS_PASSWORD: "irods"
+        IRODS_PASSWORD: "irods"  # Required when the app auth file is not present
       ports:
         - "3333:3333"
       volumes:

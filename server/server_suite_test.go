@@ -72,7 +72,7 @@ var _ = BeforeSuite(func() {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
-	manager, err := server.NewICommandsEnvironmentManager()
+	manager, err := server.NewICommandsEnvironmentManager(suiteLogger, iRODSEnvFilePath)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(manager.GetEnvironmentFilePath()).To(Equal(iRODSEnvFilePath))
 	Expect(manager.Password).To(Equal(iRODSPassword))

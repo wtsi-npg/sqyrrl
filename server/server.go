@@ -37,7 +37,6 @@ import (
 	"github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
-	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/rs/zerolog"
 )
@@ -129,12 +128,31 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		return nil, err
 	}
 
+	var cwd string
+	cwd, err = os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
 	subLogger := logger.With().
 		Str("hostname", hostname).
 		Str("component", "server").Logger()
 
 	var manager *icommands.ICommandsEnvironmentManager
-	if manager, err = NewICommandsEnvironmentManager(); err != nil {
+	if config.EnvFilePath == "" {
+		config.EnvFilePath = IRODSEnvFilePath()
+	}
+
+	logger.Debug().
+		Str("host", config.Host).
+		Str("port", config.Port).
+		Str("cert_file", config.CertFilePath).
+		Str("key_file", config.KeyFilePath).
+		Str("irods_env", config.EnvFilePath).
+		Str("cwd", cwd).
+		Dur("index_interval", config.IndexInterval).Msg("Server configured")
+
+	if manager, err = NewICommandsEnvironmentManager(subLogger, config.EnvFilePath); err != nil {
 		logger.Err(err).Msg("Failed to create an iRODS environment manager")
 		return nil, err
 	}
@@ -166,12 +184,6 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 	}
 
 	err = server.setUpIndexing()
-	if err != nil {
-		return nil, err
-	}
-
-	var cwd string
-	cwd, err = os.Getwd()
 	if err != nil {
 		return nil, err
 	}
@@ -333,40 +345,23 @@ func (server *SqyrrlServer) waitAndShutdown() (err error) { // NRV
 
 func ConfigureAndStart(logger zerolog.Logger, config Config) error {
 	if config.Host == "" {
-		// return errors.New("missing host component of address to listen on")
 		return fmt.Errorf("server config %w: address", ErrMissingArgument)
 	}
 	if config.Port == "" {
-		// return errors.New("missing port component of address to listen on")
 		return fmt.Errorf("server config %w: port", ErrMissingArgument)
 	}
 	if config.CertFilePath == "" {
-		// return errors.New("missing certificate file path")
 		return fmt.Errorf("server config %w: certificate file path", ErrMissingArgument)
 	}
 	if config.KeyFilePath == "" {
-		// return errors.New("missing key file path")
 		return fmt.Errorf("server config %w: key file path", ErrMissingArgument)
 	}
-	if config.EnvFilePath == "" {
-		// return errors.New("missing iRODS environment file path")
-		return fmt.Errorf("server config %w: iRODS environment file path", ErrMissingArgument)
-	}
 	if !(config.IndexInterval > 0) {
-		// return errors.New("missing index interval")
 		return fmt.Errorf("server config %w: index interval", ErrMissingArgument)
 	}
 
-	envFilePath, err := util.ExpandHomeDir(config.EnvFilePath)
-	if err != nil {
-		logger.Err(err).Str("path", config.EnvFilePath).
-			Msg("Failed to expand the iRODS environment file path")
-		return err
-	}
-	config.EnvFilePath = envFilePath
-
 	var server *SqyrrlServer
-	server, err = NewSqyrrlServer(logger, config)
+	server, err := NewSqyrrlServer(logger, config)
 	if err != nil {
 		return err
 	}
