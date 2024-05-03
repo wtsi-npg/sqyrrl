@@ -46,9 +46,9 @@ const (
 	CategoryAttr       = Namespace + NamespaceSeparator + "category"
 )
 
-// IRODSEnvFilePath returns the path to the iRODS environment file. If the path
-// is not set in the environment, the default path is returned.
-func IRODSEnvFilePath() string {
+// LookupIRODSEnvFilePath returns the path to the iRODS environment file set in the
+// environment. If not set, the default path is returned.
+func LookupIRODSEnvFilePath() string {
 	path := os.Getenv(IRODSEnvFileEnvVar)
 	if path == "" {
 		path = IRODSEnvFileDefault

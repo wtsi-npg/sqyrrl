@@ -140,7 +140,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 
 	var manager *icommands.ICommandsEnvironmentManager
 	if config.EnvFilePath == "" {
-		config.EnvFilePath = IRODSEnvFilePath()
+		config.EnvFilePath = LookupIRODSEnvFilePath()
 	}
 
 	logger.Debug().

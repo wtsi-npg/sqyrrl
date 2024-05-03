@@ -160,7 +160,7 @@ func CLI() {
 		"key-file", "",
 		"Path to the SSL private key file")
 	startCmd.Flags().StringVar(&cliFlagsSelected.envFilePath,
-		"irods-env", server.IRODSEnvFilePath(),
+		"irods-env", server.LookupIRODSEnvFilePath(),
 		"Path to the iRODS environment file")
 	startCmd.Flags().DurationVar(&cliFlagsSelected.indexInterval,
 		"index-interval", server.DefaultIndexInterval,
