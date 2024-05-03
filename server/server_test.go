@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -33,9 +34,9 @@ var _ = Describe("Server startup and shutdown", func() {
 		}
 	})
 
-	When("a server instance is created", func() {
+	When("a server is created", func() {
 		It("can be started and stopped", func() {
-			server, err := server.NewSqyrrlServer(suiteLogger, config)
+			srv, err := server.NewSqyrrlServer(suiteLogger, config)
 			Expect(err).NotTo(HaveOccurred())
 
 			var startStopErr error
@@ -44,7 +45,7 @@ var _ = Describe("Server startup and shutdown", func() {
 			wgStop.Add(1)
 			go func() {
 				defer wgStop.Done()
-				startStopErr = server.Start()
+				startStopErr = srv.Start()
 			}()
 
 			insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
@@ -63,10 +64,46 @@ var _ = Describe("Server startup and shutdown", func() {
 			Eventually(homePage, "5s").Should(BeTrue())
 			Expect(startStopErr).NotTo(HaveOccurred())
 
-			server.Stop()
+			srv.Stop()
 			wgStop.Wait()
 
 			Expect(startStopErr).NotTo(HaveOccurred())
+		})
+	})
+
+	When("no iRODS environment file is provided on the command line", func() {
+		When("no IRODS_ENVIRONMENT_FILE environment variable is set", func() {
+			It("uses the default iRODS environment file path", func() {
+				config.EnvFilePath = ""
+				srv, err := server.NewSqyrrlServer(suiteLogger, config)
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(srv.IRODSEnvFilePath()).To(Equal(server.LookupIRODSEnvFilePath()))
+			})
+		})
+
+		When("an IRODS_ENVIRONMENT_FILE environment variable is set", func() {
+			It("uses the IRODS_ENVIRONMENT_FILE environment variable", func() {
+				envFilePath := config.EnvFilePath
+				config.EnvFilePath = ""
+
+				serr := os.Setenv("IRODS_ENVIRONMENT_FILE", envFilePath)
+				Expect(serr).NotTo(HaveOccurred())
+
+				srv, err := server.NewSqyrrlServer(suiteLogger, config)
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(srv.IRODSEnvFilePath()).To(Equal(envFilePath))
+			})
+		})
+	})
+
+	When("the configured iRODS environment file is not found", func() {
+		It("returns an error", func() {
+			config.EnvFilePath = "nonexistent.json"
+			srv, err := server.NewSqyrrlServer(suiteLogger, config)
+			Expect(err).To(HaveOccurred())
+			Expect(srv).To(BeNil())
 		})
 	})
 })
