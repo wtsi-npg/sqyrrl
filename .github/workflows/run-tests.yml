@@ -26,8 +26,8 @@ jobs:
           - irods: "4.3.1"
             server_image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3.1:latest"
             experimental: false
-          - irods: "4.3.0"
-            server_image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3-nightly:latest"
+          - irods: "4.3.2"
+            server_image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3.2:latest"
             experimental: true
 
     services:
