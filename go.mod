@@ -5,7 +5,7 @@ go 1.22
 require (
 	github.com/cyverse/go-irodsclient v0.14.4
 	github.com/microcosm-cc/bluemonday v1.0.26
-	github.com/onsi/ginkgo/v2 v2.17.2
+	github.com/onsi/ginkgo/v2 v2.17.3
 	github.com/onsi/gomega v1.33.1
 	github.com/rs/xid v1.5.0
 	github.com/rs/zerolog v1.32.0
