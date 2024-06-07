@@ -23,7 +23,8 @@ import (
 )
 
 var (
-	ErrArgument        = errors.New("argument error")
-	ErrMissingArgument = fmt.Errorf("%w: missing argument", ErrArgument)
-	ErrInvalidArgument = fmt.Errorf("%w: invalid argument", ErrArgument)
+	ErrArgument                  = errors.New("argument error")
+	ErrMissingArgument           = fmt.Errorf("%w: missing argument", ErrArgument)
+	ErrInvalidArgument           = fmt.Errorf("%w: invalid argument", ErrArgument)
+	ErrEnvironmentVariableNotSet = fmt.Errorf("%w: environment variable not set", ErrArgument)
 )
