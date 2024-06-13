@@ -20,7 +20,7 @@ Sqyrrl is an early development version and has the following limitations:
 
 ## Running Sqyrrl
 
-Sqrrl authenticates to iRODS using the standard method for an iRODS client i.e.
+Sqyrrl authenticates to iRODS using the standard method for an iRODS client i.e.
 using the iRODS environment file. It respects the `IRODS_ENVIRONMENT_FILE` environment
 variable, and if that is not set, it will look for the file in the standard location
 `$HOME/.irods/irods_environment.json`. Alternatively, command line option `--irods-env`
@@ -55,6 +55,20 @@ active connections to close before shutting down.
 
 For additional options, use the `--help` flag.
 
+## Authentication - WARNING: This feature is not yet fully implemented
+
+Sqyrrl supports OpenID Connect for authentication. To enable OpenID Connect, use the
+`--enable-oidc` flag. The following environment variables are then required:
+
+- `OIDC_CLIENT_ID` - the client ID for the OIDC provider
+- `OIDC_CLIENT_SECRET` - the client secret for the OIDC provider
+- `OIDC_ISSUER_URL` - the URL of the OIDC provider
+
+Sqyrrl will then redirect users to the OIDC provider for authentication. The user will be
+redirected back to Sqyrrl after authentication.
+
+**Currently this feature does nothing more than enable the Login / Logout buttons on the
+home page.**
 
 ## iRODS authentication
 

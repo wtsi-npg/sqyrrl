@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/cyverse/go-irodsclient/irods/connection"
 	"github.com/cyverse/go-irodsclient/irods/fs"
@@ -39,13 +40,29 @@ var _ = Describe("iRODS Get Handler", func() {
 	var testZone, rootColl, workColl string
 	var testFile, localPath, remotePath string
 
+	var testConfig server.Config
+	var testServer *server.SqyrrlServer
+
 	BeforeEach(func() {
 		// Put a test file into iRODS
 		testZone = "testZone"
 		rootColl = fmt.Sprintf("/%s/home/irods", testZone)
 		workColl = TmpRodsPath(rootColl, "iRODSGetHandler")
 
-		err := irodsFS.MakeDir(workColl, true)
+		testConfig = server.Config{
+			Host:          "localhost",
+			Port:          "9999",
+			EnableOIDC:    false,
+			CertFilePath:  "./testdata/config/localhost.crt",
+			KeyFilePath:   "./testdata/config/localhost.key",
+			IndexInterval: time.Hour * 1,
+		}
+
+		var err error
+		testServer, err = server.NewSqyrrlServer(suiteLogger, testConfig)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = irodsFS.MakeDir(workColl, true)
 		Expect(err).NotTo(HaveOccurred())
 
 		testFile = "test.txt"
@@ -68,7 +85,7 @@ var _ = Describe("iRODS Get Handler", func() {
 
 		BeforeEach(func() {
 			handler = http.StripPrefix(server.EndpointAPI,
-				server.HandleIRODSGet(suiteLogger, account))
+				server.HandleIRODSGet(testServer))
 
 			objPath := path.Join(workColl, "no", "such", "file.txt")
 			getURL, err := url.JoinPath(server.EndpointAPI, objPath)
@@ -92,7 +109,7 @@ var _ = Describe("iRODS Get Handler", func() {
 
 		BeforeEach(func() {
 			handler = http.StripPrefix(server.EndpointAPI,
-				server.HandleIRODSGet(suiteLogger, account))
+				server.HandleIRODSGet(testServer))
 
 			objPath := path.Join(workColl, testFile)
 			getURL, err := url.JoinPath(server.EndpointAPI, objPath)
@@ -118,7 +135,7 @@ var _ = Describe("iRODS Get Handler", func() {
 
 			BeforeEach(func() {
 				handler = http.StripPrefix(server.EndpointAPI,
-					server.HandleIRODSGet(suiteLogger, account))
+					server.HandleIRODSGet(testServer))
 
 				conn, err = irodsFS.GetIOConnection()
 				Expect(err).NotTo(HaveOccurred())

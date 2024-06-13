@@ -80,9 +80,9 @@ func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentMan
 	return err
 }
 
-// NewICommandsEnvironmentManager creates a new environment manager instance.
+// NewICommandsEnvironmentManager creates a new environment iRODSEnvManager instance.
 //
-// This function creates a manager and sets the iRODS environment file path from the
+// This function creates a iRODSEnvManager and sets the iRODS environment file path from the
 // shell environment. If an iRODS auth file is present, the password is read from it.
 // Otherwise, the password is read from the shell environment.
 func NewICommandsEnvironmentManager(logger zerolog.Logger,
@@ -92,7 +92,7 @@ func NewICommandsEnvironmentManager(logger zerolog.Logger,
 			ErrInvalidArgument)
 	}
 
-	// manager.Load() below will succeed even if the iRODS environment file does not
+	// iRODSEnvManager.Load() below will succeed even if the iRODS environment file does not
 	// exist, but we absolutely don't want that behaviour here.
 	var fileInfo os.FileInfo
 	if fileInfo, err = os.Stat(iRODSEnvFilePath); err != nil && os.IsNotExist(err) {
@@ -132,14 +132,15 @@ func NewICommandsEnvironmentManager(logger zerolog.Logger,
 				authFilePath, IRODSPasswordEnvVar, ErrInvalidArgument)
 		}
 
-		manager.Password = password // manager.Password is propagated to the iRODS account
+		manager.Password = password // The password is propagated to the iRODS account
 	}
 
 	return manager, nil
 }
 
 // NewIRODSAccount returns an iRODS account instance using the iRODS environment for
-// configuration. The environment file path is obtained from the manager.
+// configuration. The environment file path is obtained from the iRODS environment
+// manager.
 func NewIRODSAccount(logger zerolog.Logger,
 	manager *icommands.ICommandsEnvironmentManager) (account *types.IRODSAccount, err error) { // NRV
 	if account, err = manager.ToIRODSAccount(); err != nil {

@@ -34,11 +34,14 @@ import (
 
 	_ "crypto/tls" // Leave this to ensure that the TLS package is linked
 
+	"github.com/alexedwards/scs/v2"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/rs/zerolog"
+	"golang.org/x/oauth2"
 )
 
 type ContextKey string
@@ -46,13 +49,17 @@ type ContextKey string
 // SqyrrlServer is an HTTP server which contains an embedded iRODS client.
 type SqyrrlServer struct {
 	http.Server
-	config  Config
-	context context.Context                        // Context for clean shutdown
-	cancel  context.CancelFunc                     // Cancel function for the server
-	logger  zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
-	manager *icommands.ICommandsEnvironmentManager // iRODS manager for the embedded client
-	account *types.IRODSAccount                    // iRODS account for the embedded client
-	index   *ItemIndex                             // ItemIndex of items in the iRODS server
+	sqyrrlConfig    Config
+	oauth2Config    *oauth2.Config
+	oidcConfig      *oidc.Config
+	oidcProvider    *oidc.Provider
+	sessionManager  *scs.SessionManager
+	context         context.Context                        // Context for clean shutdown
+	cancel          context.CancelFunc                     // Cancel function for the server
+	logger          zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
+	iRODSEnvManager *icommands.ICommandsEnvironmentManager // iRODS environment manager for the embedded client
+	iRODSAccount    *types.IRODSAccount                    // iRODS account for the embedded client
+	iRODSIndex      *ItemIndex                             // ItemIndex of items in the iRODS server
 }
 
 type Config struct {
@@ -61,6 +68,7 @@ type Config struct {
 	EnvFilePath   string // Path to the iRODS environment file
 	CertFilePath  string
 	KeyFilePath   string
+	EnableOIDC    bool
 	IndexInterval time.Duration
 }
 
@@ -71,8 +79,20 @@ const (
 	DefaultIndexInterval = 60 * time.Second
 )
 
-const correlationIDKey = ContextKey("correlation_id")
+const (
+	EnvClientID     = "OIDC_CLIENT_ID"
+	EnvClientSecret = "OIDC_CLIENT_SECRET"
+	EnvOIDCIssuer   = "OIDC_ISSUER_URL"
+)
 
+const (
+	sessionKeyState       = "state"
+	sessionKeyAccessToken = "access_token"
+	sessionKeyUserEmail   = "user_email"
+	sessionKeyUserName    = "user_name"
+)
+
+const correlationIDKey = ContextKey("correlation_id")
 const staticContentDir = "static"
 
 var userInputPolicy = bluemonday.StrictPolicy()
@@ -103,16 +123,15 @@ func init() {
 // sub-loggers for its components.
 func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer, err error) { // NRV
 	if config.Host == "" {
-		return nil, fmt.Errorf("server config %w: host", ErrMissingArgument)
+		return nil, fmt.Errorf("server sqyrrlConfig %w: host", ErrMissingArgument)
 	}
 	if config.Port == "" {
-		return nil, fmt.Errorf("server config %w: port", ErrMissingArgument)
+		return nil, fmt.Errorf("server sqyrrlConfig %w: port", ErrMissingArgument)
 	}
 	if config.CertFilePath == "" {
 		return nil,
-			fmt.Errorf("server config %w: certificate file path", ErrMissingArgument)
+			fmt.Errorf("server sqyrrlConfig %w: certificate file path", ErrMissingArgument)
 	}
-
 	if config.IndexInterval < MinIndexInterval {
 		logger.Warn().
 			Dur("interval", config.IndexInterval).
@@ -138,27 +157,57 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		Str("hostname", hostname).
 		Str("component", "server").Logger()
 
-	var manager *icommands.ICommandsEnvironmentManager
+	var oidcConfig *oidc.Config
+	var oidcProvider *oidc.Provider
+	var oauth2Config *oauth2.Config
+	var clientID, clientSecret, oidcIssuer string
+
+	if config.EnableOIDC {
+		if clientID, err = getEnv(EnvClientID); err != nil {
+			return nil, err
+		}
+		if clientSecret, err = getEnv(EnvClientSecret); err != nil {
+			return nil, err
+		}
+		if oidcIssuer, err = getEnv(EnvOIDCIssuer); err != nil {
+			return nil, err
+		}
+
+		oidcConfig = &oidc.Config{
+			ClientID: clientID,
+		}
+
+		oidcProvider, err = oidc.NewProvider(context.Background(), oidcIssuer)
+		if err != nil {
+			return nil, err
+		}
+
+		oauth2Config = &oauth2.Config{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			Endpoint:     oidcProvider.Endpoint(),
+			RedirectURL:  "https://" + net.JoinHostPort("localhost", config.Port) + EndpointAuthCallback,
+			Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+		}
+
+		logger.Info().
+			Str("auth_url", oidcProvider.Endpoint().AuthURL).
+			Str("redirect_url", oauth2Config.RedirectURL).
+			Msg("OIDC provider configured")
+	}
+
+	var iRODSEnvManager *icommands.ICommandsEnvironmentManager
 	if config.EnvFilePath == "" {
 		config.EnvFilePath = LookupIRODSEnvFilePath()
 	}
 
-	logger.Debug().
-		Str("host", config.Host).
-		Str("port", config.Port).
-		Str("cert_file", config.CertFilePath).
-		Str("key_file", config.KeyFilePath).
-		Str("irods_env", config.EnvFilePath).
-		Str("cwd", cwd).
-		Dur("index_interval", config.IndexInterval).Msg("Server configured")
-
-	if manager, err = NewICommandsEnvironmentManager(subLogger, config.EnvFilePath); err != nil {
+	if iRODSEnvManager, err = NewICommandsEnvironmentManager(subLogger, config.EnvFilePath); err != nil {
 		logger.Err(err).Msg("Failed to create an iRODS environment manager")
 		return nil, err
 	}
 
-	var account *types.IRODSAccount
-	if account, err = NewIRODSAccount(subLogger, manager); err != nil {
+	var iRODSAccount *types.IRODSAccount
+	if iRODSAccount, err = NewIRODSAccount(subLogger, iRODSEnvManager); err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")
 		return nil, err
 	}
@@ -167,19 +216,33 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 	mux := http.NewServeMux()
 	serverCtx, cancelServer := context.WithCancel(context.Background())
 
+	// Server-side storage of session data, keyed on a random session ID exchanged with
+	// the client
+	sessionManager := scs.New()
+	sessionManager.Cookie.Name = "sqyrrl-session"         // Session cookie name
+	sessionManager.Cookie.HttpOnly = true                 // Don't let JS access the cookie
+	sessionManager.Cookie.Persist = true                  // Allow the session to persist across browser sessions
+	sessionManager.Cookie.SameSite = http.SameSiteLaxMode // Can't use Strict because of the OAuth2 callback
+	sessionManager.Cookie.Secure = true                   // Require HTTPS because SameSite can't be Strict
+
 	server = &SqyrrlServer{
 		http.Server{
-			Addr:    addr,
-			Handler: mux,
+			Addr: addr,
+			// Wrap the handler to enable automatic session management by scs
+			Handler: sessionManager.LoadAndSave(mux),
 			BaseContext: func(listener net.Listener) context.Context {
 				return serverCtx
 			}},
 		config,
+		oauth2Config,
+		oidcConfig,
+		oidcProvider,
+		sessionManager,
 		serverCtx,
 		cancelServer,
 		subLogger,
-		manager,
-		account,
+		iRODSEnvManager,
+		iRODSAccount,
 		NewItemIndex([]Item{}),
 	}
 
@@ -197,6 +260,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		Str("cert_file", config.CertFilePath).
 		Str("key_file", config.KeyFilePath).
 		Str("irods_env", config.EnvFilePath).
+		Bool("oidc_enabled", config.EnableOIDC).
 		Str("cwd", cwd).
 		Dur("index_interval", config.IndexInterval).Msg("Server configured")
 
@@ -204,11 +268,11 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 }
 
 func (server *SqyrrlServer) IRODSEnvFilePath() string {
-	return server.manager.GetEnvironmentFilePath()
+	return server.iRODSEnvManager.GetEnvironmentFilePath()
 }
 
 func (server *SqyrrlServer) IRODSAuthFilePath() string {
-	return server.manager.GetPasswordFilePath()
+	return server.iRODSEnvManager.GetPasswordFilePath()
 }
 
 // Start starts the server. This function blocks until the server is stopped.
@@ -226,16 +290,16 @@ func (server *SqyrrlServer) Start() error {
 		// given as relative paths. We don't abort on errors here because it's cleaner
 		// to allow the server to try to start and clean up any resulting error in one
 		// place.
-		absCertFilePath, err := filepath.Abs(server.config.CertFilePath)
+		absCertFilePath, err := filepath.Abs(server.sqyrrlConfig.CertFilePath)
 		if err != nil {
 			logger.Err(err).
-				Str("path", server.config.CertFilePath).
+				Str("path", server.sqyrrlConfig.CertFilePath).
 				Msg("Failed to get the absolute path of the certificate file")
 		}
-		absKeyFilePath, err := filepath.Abs(server.config.KeyFilePath)
+		absKeyFilePath, err := filepath.Abs(server.sqyrrlConfig.KeyFilePath)
 		if err != nil {
 			logger.Err(err).
-				Str("path", server.config.KeyFilePath).
+				Str("path", server.sqyrrlConfig.KeyFilePath).
 				Msg("Failed to get the absolute path of the key file")
 		}
 
@@ -293,18 +357,18 @@ func (server *SqyrrlServer) setUpIndexing() (err error) { // NRV
 	logger := server.logger
 
 	var filesystem *fs.FileSystem
-	filesystem, err = fs.NewFileSystemWithDefault(server.account, AppName)
+	filesystem, err = fs.NewFileSystemWithDefault(server.iRODSAccount, AppName)
 	if err != nil {
 		return err
 	}
 
 	// Query the iRODS server for items at regular intervals
-	itemChan := queryAtIntervals(logger, server.context, server.config.IndexInterval,
+	itemChan := queryAtIntervals(logger, server.context, server.sqyrrlConfig.IndexInterval,
 		func() ([]Item, error) {
 			return findItems(filesystem)
 		})
 
-	logger.Info().Dur("interval", server.config.IndexInterval).Msg("Indexing started")
+	logger.Info().Dur("interval", server.sqyrrlConfig.IndexInterval).Msg("Indexing started")
 
 	// Create an index of items. This goroutine updates the index from the item
 	// channel. It is the only goroutine that receives from the channel and the only
@@ -318,15 +382,43 @@ func (server *SqyrrlServer) setUpIndexing() (err error) { // NRV
 				logger.Info().Msg("Indexing cancelled")
 				return
 			case items := <-itemChan:
-				server.index.SetItems(items)
+				server.iRODSIndex.SetItems(items)
 				logger.Info().
-					Str("index", server.index.String()).
+					Str("index", server.iRODSIndex.String()).
 					Msg("Updated index")
 			}
 		}
 	}()
 
 	return nil
+}
+
+func (server *SqyrrlServer) isAuthenticated(r *http.Request) bool {
+	return server.getSessionAccessToken(r) != ""
+}
+
+func (server *SqyrrlServer) getSessionAccessToken(r *http.Request) string {
+	return server.sessionManager.GetString(r.Context(), sessionKeyAccessToken)
+}
+
+func (server *SqyrrlServer) setSessionAccessToken(ctx context.Context, token string) {
+	server.sessionManager.Put(ctx, sessionKeyAccessToken, token)
+}
+
+func (server *SqyrrlServer) getSessionUserEmail(r *http.Request) string {
+	return server.sessionManager.GetString(r.Context(), sessionKeyUserEmail)
+}
+
+func (server *SqyrrlServer) setSessionUserEmail(ctx context.Context, email string) {
+	server.sessionManager.Put(ctx, sessionKeyUserEmail, email)
+}
+
+func (server *SqyrrlServer) getSessionUserName(r *http.Request) string {
+	return server.sessionManager.GetString(r.Context(), sessionKeyUserName)
+}
+
+func (server *SqyrrlServer) setSessionUserName(ctx context.Context, name string) {
+	server.sessionManager.Put(ctx, sessionKeyUserName, name)
 }
 
 func (server *SqyrrlServer) waitAndShutdown() (err error) { // NRV
@@ -345,19 +437,19 @@ func (server *SqyrrlServer) waitAndShutdown() (err error) { // NRV
 
 func ConfigureAndStart(logger zerolog.Logger, config Config) error {
 	if config.Host == "" {
-		return fmt.Errorf("server config %w: address", ErrMissingArgument)
+		return fmt.Errorf("server sqyrrlConfig %w: address", ErrMissingArgument)
 	}
 	if config.Port == "" {
-		return fmt.Errorf("server config %w: port", ErrMissingArgument)
+		return fmt.Errorf("server sqyrrlConfig %w: port", ErrMissingArgument)
 	}
 	if config.CertFilePath == "" {
-		return fmt.Errorf("server config %w: certificate file path", ErrMissingArgument)
+		return fmt.Errorf("server sqyrrlConfig %w: certificate file path", ErrMissingArgument)
 	}
 	if config.KeyFilePath == "" {
-		return fmt.Errorf("server config %w: key file path", ErrMissingArgument)
+		return fmt.Errorf("server sqyrrlConfig %w: key file path", ErrMissingArgument)
 	}
 	if !(config.IndexInterval > 0) {
-		return fmt.Errorf("server config %w: index interval", ErrMissingArgument)
+		return fmt.Errorf("server sqyrrlConfig %w: index interval", ErrMissingArgument)
 	}
 
 	var server *SqyrrlServer
@@ -369,7 +461,17 @@ func ConfigureAndStart(logger zerolog.Logger, config Config) error {
 	return server.Start()
 }
 
-func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int, message ...string) {
+func getEnv(envVar string) (string, error) {
+	val := os.Getenv(envVar)
+	if val == "" {
+		return "", fmt.Errorf("server sqyrrlConfig %w: %s",
+			ErrEnvironmentVariableNotSet, envVar)
+	}
+	return val, nil
+}
+
+func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int,
+	message ...string) {
 	var msg string
 	if len(message) > 1 {
 		msg = strings.Join(message, " ")

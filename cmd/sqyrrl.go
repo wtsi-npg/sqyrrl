@@ -36,14 +36,16 @@ var mainLogger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr})
 
 type cliFlags struct {
 	certFilePath string // Path to the certificate file
-	envFilePath  string // Path to the iRODS environment file
 	keyFilePath  string // Path to the key file
+	envFilePath  string // Path to the iRODS environment file
 
 	host  string // Address to listen on, host part
 	level string // Logging level
 	port  string // Port to listen on
 
 	indexInterval time.Duration // Interval to index files
+
+	enableOIDC bool // Enable OpenID Connect authentication
 }
 
 var cliFlagsSelected = cliFlags{
@@ -98,7 +100,8 @@ func checkLogLevelValue(cmd *cobra.Command, args []string) {
 	levelFlag := cliFlagsSelected.level
 	if levelFlag != "" {
 		for _, level := range []string{"trace", "debug", "info", "warn", "error"} {
-			if levelFlag == level {
+			if strings.EqualFold(levelFlag, level) {
+				cliFlagsSelected.level = level
 				return
 			}
 		}
@@ -124,6 +127,7 @@ func startServer(cmd *cobra.Command, args []string) error {
 		CertFilePath:  cliFlagsSelected.certFilePath,
 		KeyFilePath:   cliFlagsSelected.keyFilePath,
 		EnvFilePath:   cliFlagsSelected.envFilePath,
+		EnableOIDC:    cliFlagsSelected.enableOIDC,
 		IndexInterval: cliFlagsSelected.indexInterval,
 	})
 }
@@ -165,6 +169,9 @@ func CLI() {
 	startCmd.Flags().DurationVar(&cliFlagsSelected.indexInterval,
 		"index-interval", server.DefaultIndexInterval,
 		"Interval at which update the index")
+	startCmd.Flags().BoolVar(&cliFlagsSelected.enableOIDC,
+		"enable-oidc", false,
+		"Enable OpenID Connect authentication")
 
 	rootCmd.AddCommand(startCmd)
 
