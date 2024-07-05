@@ -2,6 +2,10 @@ VERSION := $(shell git describe --always --tags --dirty)
 ldflags := "-X sqyrrl/server.Version=${VERSION}"
 build_args := -a -v -ldflags ${ldflags}
 
+build_path = "build/sqyrrl-${VERSION}"
+
+CGO_ENABLED := 1
+GOARCH := amd64
 
 .PHONY: build build-linux build-darwin build-windows check clean coverage install lint test
 
@@ -10,16 +14,19 @@ all: build
 build: build-linux build-darwin build-windows
 
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ${build_args} -o sqyrrl-linux-amd64 ./main.go
+	mkdir -p ${build_path}
+	GOOS=linux go build ${build_args} -o ${build_path}/sqyrrl-linux-${GOARCH} ./main.go
 
 build-darwin:
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ${build_args} -o sqyrrl-darwin-amd64 ./main.go
+	mkdir -p ${build_path}
+	GOOS=darwin go build ${build_args} -o ${build_path}/sqyrrl-darwin-${GOARCH} ./main.go
 
 build-windows:
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ${build_args} -o sqyrrl-windows-amd64.exe ./main.go
+	mkdir -p ${build_path}
+	GOOS=windows go build ${build_args} -o ${build_path}/sqyrrl-windows-${GOARCH}.exe ./main.go
 
 install:
-	go install -ldflags ${ldflags}
+	go install ${build_args}
 
 lint:
 	golangci-lint run ./...
@@ -32,6 +39,11 @@ test:
 coverage:
 	ginkgo -r --cover -coverprofile=coverage.out
 
+dist: build
+	cp README.md COPYING ${build_path}
+	tar -C ./build -cvj -f ./build/sqyrrl-${VERSION}.tar.bz2 sqyrrl-${VERSION}
+	shasum -a 256 ./build/sqyrrl-${VERSION}.tar.bz2 > ./build/sqyrrl-${VERSION}.tar.bz2.sha256
+
 clean:
 	go clean
-	$(RM) sqyrrl-*
+	$(RM) -r ./build

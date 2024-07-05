@@ -41,19 +41,16 @@ jobs:
           echo 'GIT_URL='$(git remote get-url origin) >> $GITHUB_ENV
           echo 'GIT_COMMIT='$(git log --pretty=format:'%H' -n 1) >> $GITHUB_ENV
 
-      - name: "Build executables"
+      - name: "Build distribution"
         run: |
-          make build
-          for f in sqyrrl-*; do
-            sha256sum "$f" > "$f.sha256"
-          done
+          make dist
 
       - name: "Create Release"
         uses: ncipollo/release-action@v1.14.0
         with:
           name: ${{ env.RELEASE_VERSION }}
           prerelease: ${{ !(github.sha == env.MASTER_SHA) }}
-          artifacts: "sqyrrl-*"
+          artifacts: "./build/*.tar.bz2,./build/*.tar.bz2.sha256"
           removeArtifacts: true
           artifactErrorsFailBuild: true
           generateReleaseNotes: true
