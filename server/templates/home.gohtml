@@ -1,22 +1,52 @@
 {{template "header" .}}
 
+{{ $authenticated := .Authenticated }}
+{{ $login_url := .LoginURL }}
+{{ $logout_url := .LogoutURL }}
+
+{{ $user_name := .UserName }}
+{{ $user_email := .UserEmail }}
+
 {{ $categories := .Categories }}
 {{ $items := .CategorisedItems }}
+
+{{ $auth_form_state := "disabled" }}
+{{ if .AuthAvailable }}
+    {{ $auth_form_state = "" }}
+{{ end }}
 
 <div class="container">
     <div class="top-left-cell"><img src="/static/favicon-32x32.png" alt="Sqyrrl"></div>
 
-    <div class="top-cell"><h2>Sqyrrl</h2></div>
+    <div class="top-cell">
+        <h3>
+        {{ if $authenticated }}
+            {{ $user_name }} &lt;{{ $user_email }}&gt;
+        {{ else }}
+            Not logged in
+        {{ end }}
+        </h3>
+    </div>
 
-    <div class="top-right-cell">Version: {{ .Version}}</div>
+    <div class="top-right-cell">
+        {{ if $authenticated }}
+            <form method="post"  action="{{ $logout_url }}">
+                <button id="logout-button" type="submit" {{$auth_form_state}}>Logout</button>
+            </form>
+        {{ else }}
+            <form method="post" action="{{ $login_url }}">
+                <button id="login-button" type="submit" {{$auth_form_state}}>Login</button>
+            </form>
+        {{ end }}
+    </div>
 
     <div class="main-cell">
         <hr/>
-        <h3>Categorised, tagged items</h3>
+        <h4>Categorised, tagged items</h4>
 
         {{ range $category := $categories }}
             {{ if $category }}
-                <h3>{{$category}}</h3>
+                <h3>{{ $category }}</h3>
 
                 <div class="url-grid">
                     {{ $citems := index $items $category }}
@@ -50,7 +80,7 @@
         {{ end }}
 
         <hr/>
-        <h3>Uncategorised, tagged items</h3>
+        <h4>Uncategorised, tagged items</h4>
 
         <div class="url-grid">
             {{ $citems := index $items "" }}

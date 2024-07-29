@@ -30,27 +30,39 @@ const (
 	EndpointRoot   = "/"
 	EndPointStatic = EndpointRoot + "static/"
 	EndpointAPI    = EndpointRoot + "api/v1/"
+
+	EndPointLogin        = EndpointAPI + "login/"
+	EndPointLogout       = EndpointAPI + "logout/"
+	EndpointAuthCallback = EndpointAPI + "auth-callback/"
+	EndPointIRODS        = EndpointAPI + "irods/"
 )
 
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
-	correlate := AddCorrelationID(server.logger)
-	logRequest := AddRequestLogger(server.logger)
-	sanitiseURL := SanitiseRequestURL(server.logger)
+	correlate := AddCorrelationID(server)
+	logRequest := AddRequestLogger(server)
+	sanitiseURL := SanitiseRequestURL(server)
 
-	getStatic := http.StripPrefix(EndPointStatic, HandleStaticContent(server.logger))
-	getObject := http.StripPrefix(EndpointAPI, HandleIRODSGet(server.logger, server.account))
+	getStatic := http.StripPrefix(EndPointStatic, HandleStaticContent(server))
+	getObject := http.StripPrefix(EndpointAPI, HandleIRODSGet(server))
 
-	// The root endpoint hosts a home page. Any requests relative to it are redirected
-	// to the API endpoint
-	mux.Handle("GET "+EndpointRoot,
-		sanitiseURL(correlate(logRequest(HandleHomePage(server.logger, server.index)))))
+	mux.Handle("POST "+EndPointLogin,
+		correlate(logRequest(HandleLogin(server))))
+	mux.Handle("POST "+EndPointLogout,
+		correlate(logRequest(HandleLogout(server))))
+	mux.Handle("GET "+EndpointAuthCallback,
+		correlate(logRequest(HandleAuthCallback(server))))
 
 	// The static endpoint is used to serve static files from a filesystem embedded in
 	// the binary
 	mux.Handle("GET "+EndPointStatic,
 		sanitiseURL(correlate(logRequest(getStatic))))
 
-	// The API endpoint is used to access files in iRODS
-	mux.Handle("GET "+EndpointAPI,
+	// The endpoint used to access files in iRODS
+	mux.Handle(EndPointIRODS,
 		sanitiseURL(correlate(logRequest(getObject))))
+
+	// The root endpoint hosts a home page. Any requests relative to it are redirected
+	// to the API endpoint
+	mux.Handle(EndpointRoot,
+		sanitiseURL(correlate(logRequest(HandleHomePage(server)))))
 }
