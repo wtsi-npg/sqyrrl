@@ -28,41 +28,51 @@ const (
 
 const (
 	EndpointRoot   = "/"
-	EndPointStatic = EndpointRoot + "static/"
+	EndpointStatic = EndpointRoot + "static/"
 	EndpointAPI    = EndpointRoot + "api/v1/"
 
-	EndPointLogin        = EndpointAPI + "login/"
-	EndPointLogout       = EndpointAPI + "logout/"
+	EndpointLogin        = EndpointAPI + "login/"
+	EndpointLogout       = EndpointAPI + "logout/"
 	EndpointAuthCallback = EndpointAPI + "auth-callback/"
-	EndPointIRODS        = EndpointAPI + "irods/"
+	EndpointIRODS        = EndpointAPI + "irods/"
 )
 
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
+	sm := server.sessionManager
+
 	correlate := AddCorrelationID(server)
 	logRequest := AddRequestLogger(server)
 	sanitiseURL := SanitiseRequestURL(server)
 
-	getStatic := http.StripPrefix(EndPointStatic, HandleStaticContent(server))
-	getObject := http.StripPrefix(EndpointAPI, HandleIRODSGet(server))
+	getStatic := http.StripPrefix(EndpointStatic, HandleStaticContent(server))
+	getObject := http.StripPrefix(EndpointIRODS, HandleIRODSGet(server))
 
-	mux.Handle("POST "+EndPointLogin,
-		correlate(logRequest(HandleLogin(server))))
-	mux.Handle("POST "+EndPointLogout,
-		correlate(logRequest(HandleLogout(server))))
-	mux.Handle("GET "+EndpointAuthCallback,
-		correlate(logRequest(HandleAuthCallback(server))))
+	loginHandler := sm.LoadAndSave(correlate(logRequest(HandleLogin(server))))
+	server.addRoute(mux, "GET", EndpointLogin, loginHandler)
+
+	logoutHandler := sm.LoadAndSave(correlate(logRequest(HandleLogout(server))))
+	server.addRoute(mux, "POST", EndpointLogout, logoutHandler)
+
+	authCallbackHandler := sm.LoadAndSave(correlate(logRequest(HandleAuthCallback(server))))
+	server.addRoute(mux, "GET", EndpointAuthCallback, authCallbackHandler)
 
 	// The static endpoint is used to serve static files from a filesystem embedded in
 	// the binary
-	mux.Handle("GET "+EndPointStatic,
-		sanitiseURL(correlate(logRequest(getStatic))))
+	staticHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(getStatic))))
+	server.addRoute(mux, "GET", EndpointStatic, staticHandler)
 
 	// The endpoint used to access files in iRODS
-	mux.Handle(EndPointIRODS,
-		sanitiseURL(correlate(logRequest(getObject))))
+	irodsGetHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(getObject))))
+	server.addRoute(mux, "GET", EndpointIRODS, irodsGetHandler)
 
 	// The root endpoint hosts a home page. Any requests relative to it are redirected
 	// to the API endpoint
-	mux.Handle(EndpointRoot,
-		sanitiseURL(correlate(logRequest(HandleHomePage(server)))))
+	rootHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(HandleHomePage(server)))))
+	server.addRoute(mux, "GET", EndpointRoot, rootHandler)
+}
+
+func (server *SqyrrlServer) addRoute(mux *http.ServeMux, method string, endpoint string,
+	handler http.Handler) {
+	mux.Handle(method+" "+endpoint, handler)
+	server.handlers[endpoint] = handler
 }

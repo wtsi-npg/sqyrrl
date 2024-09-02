@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/cyverse/go-irodsclient/fs"
+	ifs "github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/cyverse/go-irodsclient/irods/util"
@@ -175,14 +175,14 @@ func NewIRODSAccount(logger zerolog.Logger,
 
 	// Before returning the account, check that it is usable by connecting to the
 	// iRODS server and accessing the root collection.
-	var filesystem *fs.FileSystem
-	filesystem, err = fs.NewFileSystemWithDefault(account, AppName)
+	var filesystem *ifs.FileSystem
+	filesystem, err = ifs.NewFileSystemWithDefault(account, AppName)
 	if err != nil {
 		logger.Err(err).Msg("Failed to create an iRODS file system")
 		return nil, err
 	}
 
-	var root *fs.Entry
+	var root *ifs.Entry
 	root, err = filesystem.StatDir("/")
 	if err != nil {
 		logger.Err(err).Msg("Failed to stat the root zone collection")
@@ -195,15 +195,15 @@ func NewIRODSAccount(logger zerolog.Logger,
 	return account, err
 }
 
-// isPublicReadable checks if the data object at the given path is readable by the
-// public user of the zone hosting the file.
+// isReadableByUser checks if the data object at the given path is readable by the
+// given user in the zone hosting the file.
 //
-// If iRODS is federated, there may be multiple zones, each with their own public user.
-// The zone argument is the zone of public user whose read permission is to be checked,
+// If iRODS is federated, there may be multiple zones, each with their own users.
+// The zone argument is the zone of user whose read permission is to be checked,
 // which is normally the current zone. This is consulted only if the ACL user zone is
 // empty.
-func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
-	userZone string, rodsPath string) (_ bool, err error) {
+func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
+	userZone string, userName string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
 	var pathZone string
 
@@ -224,17 +224,23 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 		}
 
 		if effectiveUserZone == pathZone &&
-			ac.UserName == IRODSPublicUser &&
+			ac.UserName == userName &&
 			ac.AccessLevel == types.IRODSAccessLevelReadObject {
 			logger.Trace().
 				Str("path", rodsPath).
-				Msg("Public read access found")
+				Str("user", userName).
+				Str("zone", userZone).
+				Msg("Read access found")
 
 			return true, nil
 		}
 	}
 
-	logger.Trace().Str("path", rodsPath).Msg("Public read access not found")
+	logger.Trace().
+		Str("path", rodsPath).
+		Str("user", userName).
+		Str("zone", userZone).
+		Msg("Read access not found")
 
 	return false, nil
 }
@@ -242,62 +248,10 @@ func isPublicReadable(logger zerolog.Logger, filesystem *fs.FileSystem,
 // getFileRange serves a file from iRODS to the client. It delegates to http.ServeContent
 // which sets the appropriate headers, including Content-Type.
 func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
-	account *types.IRODSAccount, rodsPath string) {
-
-	// TODO: filesystem is thread safe, so it can be shared across requests
-	var rodsFs *fs.FileSystem
+	rodsFs *ifs.FileSystem, rodsPath string) {
 	var err error
-	if rodsFs, err = fs.NewFileSystemWithDefault(account, AppName); err != nil {
-		logger.Err(err).Msg("Failed to create an iRODS file system")
-		writeErrorResponse(logger, w, http.StatusInternalServerError)
-		return
-	}
 
-	defer rodsFs.Release()
-
-	// Don't use filesystem.ExistsFile(objPath) here because it will return false if the
-	// file _does_ exist on the iRODS server, but the server is down or unreachable.
-	//
-	// filesystem.StatFile(objPath) is better because we can check for the error type.
-	if _, err = rodsFs.StatFile(rodsPath); err != nil {
-		if types.IsAuthError(err) {
-			logger.Err(err).
-				Str("path", rodsPath).
-				Msg("Failed to authenticate with iRODS")
-			writeErrorResponse(logger, w, http.StatusUnauthorized)
-			return
-		}
-		if types.IsFileNotFoundError(err) {
-			logger.Info().
-				Str("path", rodsPath).
-				Msg("Requested path does not exist")
-			writeErrorResponse(logger, w, http.StatusNotFound)
-			return
-		}
-		logger.Err(err).Str("path", rodsPath).Msg("Failed to stat file")
-		writeErrorResponse(logger, w, http.StatusInternalServerError)
-		return
-	}
-
-	zone := account.ClientZone
-
-	var publicReadable bool
-	if publicReadable, err = isPublicReadable(logger, rodsFs, zone, rodsPath); err != nil {
-		logger.Err(err).
-			Str("path", rodsPath).
-			Msg("Failed to check public read access")
-		writeErrorResponse(logger, w, http.StatusInternalServerError)
-		return
-	}
-	if !publicReadable {
-		logger.Info().
-			Str("path", rodsPath).
-			Msg("Requested path is not public readable")
-		writeErrorResponse(logger, w, http.StatusForbidden)
-		return
-	}
-
-	var fh *fs.FileHandle
+	var fh *ifs.FileHandle
 	if fh, err = rodsFs.OpenFile(rodsPath, "", "r"); err != nil {
 		logger.Err(err).
 			Str("path", rodsPath).
@@ -306,8 +260,8 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	defer func(fh *fs.FileHandle) {
-		if err = fh.Close(); err != nil {
+	defer func(fh *ifs.FileHandle) {
+		if err := fh.Close(); err != nil {
 			logger.Err(err).
 				Str("path", rodsPath).
 				Msg("Failed to close file handle")
@@ -325,10 +279,10 @@ func getFileRange(logger zerolog.Logger, w http.ResponseWriter, r *http.Request,
 // findItems runs a metadata query against iRODS to find any items that have metadata
 // with the key sqyrrl::index and value 1. The items are grouped by the value of the
 // metadata.
-func findItems(filesystem *fs.FileSystem) (items []Item, err error) { // NRV
+func findItems(filesystem *ifs.FileSystem) (items []Item, err error) { // NRV
 	filesystem.ClearCache() // Clears all caches (entries, metadata, ACLs)
 
-	var entries []*fs.Entry
+	var entries []*ifs.Entry
 	if entries, err = filesystem.SearchByMeta(IndexAttr, IndexValue); err != nil {
 		return nil, err
 	}

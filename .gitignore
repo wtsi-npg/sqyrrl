@@ -1,10 +1,10 @@
 .DS_store
 
-# Local environment
-.env
-
 # IntelliJ / GoLand
 .idea/
+
+# Local environment
+.env
 
 # Local outputs
 build/

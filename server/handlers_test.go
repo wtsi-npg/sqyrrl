@@ -82,13 +82,14 @@ var _ = Describe("iRODS Get Handler", func() {
 	When("a non-existent path is given", func() {
 		var r *http.Request
 		var handler http.Handler
+		var err error
 
 		BeforeEach(func() {
-			handler = http.StripPrefix(server.EndpointAPI,
-				server.HandleIRODSGet(testServer))
+			handler, err = testServer.GetHandler(server.EndpointIRODS)
+			Expect(err).NotTo(HaveOccurred())
 
 			objPath := path.Join(workColl, "no", "such", "file.txt")
-			getURL, err := url.JoinPath(server.EndpointAPI, objPath)
+			getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			r, err = http.NewRequest("GET", getURL, nil)
@@ -106,13 +107,14 @@ var _ = Describe("iRODS Get Handler", func() {
 	When("a valid data object path is given", func() {
 		var r *http.Request
 		var handler http.Handler
+		var err error
 
 		BeforeEach(func() {
-			handler = http.StripPrefix(server.EndpointAPI,
-				server.HandleIRODSGet(testServer))
+			handler, err = testServer.GetHandler(server.EndpointIRODS)
+			Expect(err).NotTo(HaveOccurred())
 
 			objPath := path.Join(workColl, testFile)
-			getURL, err := url.JoinPath(server.EndpointAPI, objPath)
+			getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			r, err = http.NewRequest("GET", getURL, nil)
@@ -131,11 +133,10 @@ var _ = Describe("iRODS Get Handler", func() {
 		When("the data object has public read permissions", func() {
 			var conn *connection.IRODSConnection
 			var acl []*types.IRODSAccess
-			var err error
 
 			BeforeEach(func() {
-				handler = http.StripPrefix(server.EndpointAPI,
-					server.HandleIRODSGet(testServer))
+				handler, err = testServer.GetHandler(server.EndpointIRODS)
+				Expect(err).NotTo(HaveOccurred())
 
 				conn, err = irodsFS.GetIOConnection()
 				Expect(err).NotTo(HaveOccurred())
