@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	ifs "github.com/cyverse/go-irodsclient/fs"
+	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/rs/xid"
 	"github.com/rs/zerolog/hlog"
 )
@@ -49,7 +51,12 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 		requestMethod := r.Method
 
 		if requestPath != "/" && requestMethod == "GET" {
-			redirect := path.Join(EndPointIRODS, requestPath)
+			if requestPath == "/favicon.ico" {
+				writeErrorResponse(logger, w, http.StatusNotFound)
+				return
+			}
+
+			redirect := path.Join(EndpointIRODS, requestPath)
 			logger.Trace().
 				Str("from", requestPath).
 				Str("to", redirect).
@@ -77,8 +84,8 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 		}
 
 		data := pageData{
-			LoginURL:         EndPointLogin,
-			LogoutURL:        EndPointLogout,
+			LoginURL:         EndpointLogin,
+			LogoutURL:        EndpointLogout,
 			AuthAvailable:    server.sqyrrlConfig.EnableOIDC,
 			Authenticated:    server.isAuthenticated(r),
 			UserName:         server.getSessionUserName(r),
@@ -278,7 +285,68 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 		objPath := path.Clean(path.Join("/", r.URL.Path))
 		logger.Debug().Str("path", objPath).Msg("Getting iRODS data object")
 
-		getFileRange(rodsLogger, w, r, server.iRODSAccount, objPath)
+		var userID string
+		if server.isAuthenticated(r) {
+			userID = iRODSUserIDFromEmail(logger, server.getSessionUserEmail(r))
+		} else {
+			userID = IRODSPublicUser
+		}
+
+		userZone := server.iRODSAccount.ClientZone
+
+		var err error
+		var rodsFs *ifs.FileSystem
+		if rodsFs, err = ifs.NewFileSystemWithDefault(server.iRODSAccount,
+			AppName); err != nil {
+			logger.Err(err).Msg("Failed to create an iRODS file system")
+			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			return
+		}
+		defer rodsFs.Release()
+
+		// Don't use filesystem.ExistsFile(objPath) here because it will return false if
+		// the file _does_ exist on the iRODS server, but the server is down or unreachable.
+		//
+		// filesystem.StatFile(objPath) is better because we can check for the error type.
+		if _, err = rodsFs.Stat(objPath); err != nil {
+			if types.IsAuthError(err) {
+				logger.Err(err).
+					Str("path", objPath).
+					Msg("Failed to authenticate with iRODS")
+				writeErrorResponse(logger, w, http.StatusUnauthorized)
+				return
+			}
+			if types.IsFileNotFoundError(err) {
+				logger.Info().
+					Str("path", objPath).
+					Msg("Requested path does not exist")
+				writeErrorResponse(logger, w, http.StatusNotFound)
+				return
+			}
+			logger.Err(err).Str("path", objPath).Msg("Failed to stat file")
+			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			return
+		}
+
+		var isReadable bool
+		isReadable, err = isReadableByUser(logger, rodsFs, userZone, userID, objPath)
+		if err != nil {
+			logger.Err(err).Msg("Failed to check if the object is readable")
+			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			return
+		}
+
+		if !isReadable {
+			logger.Info().
+				Str("path", objPath).
+				Str("id", userID).
+				Str("zone", userZone).
+				Msg("Requested path is not readable by this user")
+			writeErrorResponse(logger, w, http.StatusForbidden)
+			return
+		}
+
+		getFileRange(rodsLogger, w, r, rodsFs, objPath)
 	})
 }
 

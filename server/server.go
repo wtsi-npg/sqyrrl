@@ -25,6 +25,7 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"net/mail"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -54,6 +55,7 @@ type SqyrrlServer struct {
 	oidcConfig      *oidc.Config
 	oidcProvider    *oidc.Provider
 	sessionManager  *scs.SessionManager
+	handlers        map[string]http.Handler                // The HTTP handlers, to simplify testing
 	context         context.Context                        // Context for clean shutdown
 	cancel          context.CancelFunc                     // Cancel function for the server
 	logger          zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
@@ -229,7 +231,8 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		http.Server{
 			Addr: addr,
 			// Wrap the handler to enable automatic session management by scs
-			Handler: sessionManager.LoadAndSave(mux),
+			// Handler: sessionManager.LoadAndSave(mux),
+			Handler: mux,
 			BaseContext: func(listener net.Listener) context.Context {
 				return serverCtx
 			}},
@@ -238,6 +241,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		oidcConfig,
 		oidcProvider,
 		sessionManager,
+		make(map[string]http.Handler),
 		serverCtx,
 		cancelServer,
 		subLogger,
@@ -273,6 +277,16 @@ func (server *SqyrrlServer) IRODSEnvFilePath() string {
 
 func (server *SqyrrlServer) IRODSAuthFilePath() string {
 	return server.iRODSEnvManager.GetPasswordFilePath()
+}
+
+// GetHandler returns the handler for the named endpoint. This is used for ease of testing
+// because it will return a handler configured with the server's session manager.
+func (server *SqyrrlServer) GetHandler(endpoint string) (http.Handler, error) {
+	// If the named handler is not in the handlers map, return an error
+	if handler, ok := server.handlers[endpoint]; ok {
+		return handler, nil
+	}
+	return nil, fmt.Errorf("no handler found for endpoint %s", endpoint)
 }
 
 // Start starts the server. This function blocks until the server is stopped.
@@ -452,13 +466,11 @@ func ConfigureAndStart(logger zerolog.Logger, config Config) error {
 		return fmt.Errorf("server sqyrrlConfig %w: index interval", ErrMissingArgument)
 	}
 
-	var server *SqyrrlServer
-	server, err := NewSqyrrlServer(logger, config)
-	if err != nil {
+	if server, err := NewSqyrrlServer(logger, config); err != nil {
 		return err
+	} else {
+		return server.Start()
 	}
-
-	return server.Start()
 }
 
 func getEnv(envVar string) (string, error) {
@@ -468,6 +480,19 @@ func getEnv(envVar string) (string, error) {
 			ErrEnvironmentVariableNotSet, envVar)
 	}
 	return val, nil
+}
+
+// iRODSUserIDFromEmail extracts an iRODS user ID from an email address. This assumes
+// that the email address is in the form "username@domain", which is the case for
+// Sanger users authenticated via OpenID Connect. If the email address cannot be parsed,
+// an empty string is returned.
+func iRODSUserIDFromEmail(logger zerolog.Logger, email string) string {
+	address, err := mail.ParseAddress(email)
+	if err != nil {
+		logger.Err(err).Msg("Failed to parse user email address")
+		return ""
+	}
+	return strings.Split(address.Address, "@")[0]
 }
 
 func writeErrorResponse(logger zerolog.Logger, w http.ResponseWriter, code int,
