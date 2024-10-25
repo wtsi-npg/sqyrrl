@@ -26,7 +26,7 @@ services:
                 "--key-file", "/app/config/localhost.key",
                 "--irods-env", "/app/config/app_irods_environment.json",
                 "--enable-oidc",
-                "--index-interval", "1h",
+                "--index-interval", "60s",
                 "--log-level", "trace"]
       # Set the following environment variables in a .env file (files named .env
       # are declared in .gitignore):
