@@ -50,18 +50,16 @@ var (
 
 func TestSuite(t *testing.T) {
 	writer := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
-	suiteLogger = zerolog.New(writer).With().Timestamp().Logger().Level(zerolog.InfoLevel)
+	suiteLogger = zerolog.New(writer).With().Timestamp().Logger().Level(zerolog.
+		DebugLevel)
 
 	RegisterFailHandler(Fail)
 	RunSpecs(t, suiteName)
 }
 
 // Set up the iRODS environment and create a new iRODS filesystem
-var _ = BeforeSuite(func() {
+var _ = BeforeSuite(func(ctx SpecContext) {
 	var err error
-
-	err = os.Setenv(server.IRODSPasswordEnvVar, iRODSPassword)
-	Expect(err).NotTo(HaveOccurred())
 
 	err = os.Setenv(server.IRODSEnvFileEnvVar, iRODSEnvFilePath)
 	Expect(err).NotTo(HaveOccurred())
@@ -74,18 +72,18 @@ var _ = BeforeSuite(func() {
 
 	manager, err := server.NewICommandsEnvironmentManager(suiteLogger, iRODSEnvFilePath)
 	Expect(err).NotTo(HaveOccurred())
+
+	err = server.InitIRODS(suiteLogger, manager, iRODSPassword)
+	Expect(err).NotTo(HaveOccurred())
 	Expect(manager.GetEnvironmentFilePath()).To(Equal(iRODSEnvFilePath))
 	Expect(manager.Password).To(Equal(iRODSPassword))
 
-	err = server.InitIRODS(suiteLogger, manager)
-	Expect(err).NotTo(HaveOccurred())
-
-	account, err = server.NewIRODSAccount(suiteLogger, manager)
+	account, err = server.NewIRODSAccount(suiteLogger, manager, iRODSPassword)
 	Expect(err).NotTo(HaveOccurred())
 
 	irodsFS, err = fs.NewFileSystemWithDefault(account, suiteName)
 	Expect(err).NotTo(HaveOccurred())
-})
+}, NodeTimeout(time.Second*20))
 
 // Release the iRODS filesystem
 var _ = AfterSuite(func() {

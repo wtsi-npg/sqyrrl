@@ -6,13 +6,17 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"sqyrrl/server"
+)
+
+var (
+	certFilePath = "testdata/config/localhost.crt"
+	keyFilePath  = "testdata/config/localhost.key"
 )
 
 var _ = Describe("Server startup and shutdown", func() {
@@ -23,20 +27,19 @@ var _ = Describe("Server startup and shutdown", func() {
 		// Test server configuration uses a self-signed certificate for localhost and
 		// respected the IRODS_ENVIRONMENT_FILE environment variable to determine the
 		// test iRODS server to use.
-		configDir := filepath.Join("testdata", "config")
 		config = server.Config{
-			Host:          host,
-			Port:          port,
-			CertFilePath:  filepath.Join(configDir, "localhost.crt"),
-			KeyFilePath:   filepath.Join(configDir, "localhost.key"),
-			EnvFilePath:   filepath.Join(configDir, "test_irods_environment.json"),
-			IndexInterval: server.DefaultIndexInterval,
+			Host:             host,
+			Port:             port,
+			CertFilePath:     certFilePath,
+			KeyFilePath:      keyFilePath,
+			IRODSEnvFilePath: iRODSEnvFilePath,
+			IndexInterval:    server.DefaultIndexInterval,
 		}
 	})
 
 	When("a server is created", func() {
 		It("can be started and stopped", func() {
-			srv, err := server.NewSqyrrlServer(suiteLogger, config)
+			srv, err := server.NewSqyrrlServer(suiteLogger, &config)
 			Expect(err).NotTo(HaveOccurred())
 
 			var startStopErr error
@@ -73,37 +76,44 @@ var _ = Describe("Server startup and shutdown", func() {
 
 	When("no iRODS environment file is provided on the command line", func() {
 		When("no IRODS_ENVIRONMENT_FILE environment variable is set", func() {
-			It("uses the default iRODS environment file path", func() {
-				config.EnvFilePath = ""
-				srv, err := server.NewSqyrrlServer(suiteLogger, config)
+			It("falls back to the default", func() {
+				config.IRODSEnvFilePath = ""
+
+				serr := os.Unsetenv("IRODS_ENVIRONMENT_FILE")
+				Expect(serr).NotTo(HaveOccurred())
+
+				err := server.Configure(suiteLogger, &config)
 				Expect(err).NotTo(HaveOccurred())
 
-				Expect(srv.IRODSEnvFilePath()).To(Equal(server.LookupIRODSEnvFilePath()))
+				envRoot, err := os.UserHomeDir()
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(config.IRODSEnvFilePath).To(Equal(envRoot + "/.irods/irods_environment.json"))
 			})
 		})
 
 		When("an IRODS_ENVIRONMENT_FILE environment variable is set", func() {
 			It("uses the IRODS_ENVIRONMENT_FILE environment variable", func() {
-				envFilePath := config.EnvFilePath
-				config.EnvFilePath = ""
+				envFilePath := config.IRODSEnvFilePath
+				config.IRODSEnvFilePath = ""
 
 				serr := os.Setenv("IRODS_ENVIRONMENT_FILE", envFilePath)
 				Expect(serr).NotTo(HaveOccurred())
 
-				srv, err := server.NewSqyrrlServer(suiteLogger, config)
+				err := server.Configure(suiteLogger, &config)
 				Expect(err).NotTo(HaveOccurred())
-
-				Expect(srv.IRODSEnvFilePath()).To(Equal(envFilePath))
+				Expect(config.IRODSEnvFilePath).To(Equal(envFilePath))
 			})
 		})
 	})
 
 	When("the configured iRODS environment file is not found", func() {
 		It("returns an error", func() {
-			config.EnvFilePath = "nonexistent.json"
-			srv, err := server.NewSqyrrlServer(suiteLogger, config)
-			Expect(err).To(HaveOccurred())
-			Expect(srv).To(BeNil())
+			config.IRODSEnvFilePath = "nonexistent.json"
+			err := server.Configure(suiteLogger, &config)
+
+			_, err = server.NewSqyrrlServer(suiteLogger, &config)
+			Expect(err).To(MatchError("stat nonexistent.json: no such file or directory"))
 		})
 	})
 })

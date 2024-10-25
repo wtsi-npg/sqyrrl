@@ -34,7 +34,6 @@ import (
 const (
 	IRODSEnvFileDefault = "~/.irods/irods_environment.json"
 	IRODSEnvFileEnvVar  = "IRODS_ENVIRONMENT_FILE"
-	IRODSPasswordEnvVar = "IRODS_PASSWORD"
 	IRODSPublicUser     = "public"
 )
 
@@ -69,7 +68,13 @@ func LookupIRODSEnvFilePath() string {
 // InitIRODS initialises the iRODS environment by creating a populated auth file if it
 // does not already exist. This avoids the need to have `iinit` present on the server
 // host.
-func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentManager) (err error) {
+func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentManager,
+	password string) (err error) {
+	if password == "" {
+		return fmt.Errorf("password was empty: %w", ErrInvalidArgument)
+	}
+	manager.Password = password
+
 	authFilePath := manager.GetPasswordFilePath()
 	if _, err = os.Stat(authFilePath); err != nil && os.IsNotExist(err) {
 		logger.Info().
@@ -116,43 +121,28 @@ func NewICommandsEnvironmentManager(logger zerolog.Logger,
 		Str("path", iRODSEnvFilePath).
 		Msg("Loaded iRODS environment file")
 
-	authFilePath := manager.GetPasswordFilePath()
-
-	// An existing auth file takes precedence over the environment variable
-	if _, err = os.Stat(authFilePath); err != nil && os.IsNotExist(err) {
-		password, ok := os.LookupEnv(IRODSPasswordEnvVar)
-		if !ok {
-			return nil, fmt.Errorf("iRODS auth file '%s' was not present "+
-				"and the '%s' environment variable needed to create it was not set: %w",
-				authFilePath, IRODSPasswordEnvVar, ErrMissingArgument)
-		}
-		if password == "" {
-			return nil, fmt.Errorf("iRODS auth file '%s' was not present "+
-				"and the '%s' environment variable needed to set it was empty: %w",
-				authFilePath, IRODSPasswordEnvVar, ErrInvalidArgument)
-		}
-
-		manager.Password = password // The password is propagated to the iRODS account
-	}
-
 	return manager, nil
 }
 
 // NewIRODSAccount returns an iRODS account instance using the iRODS environment for
 // configuration. The environment file path is obtained from the iRODS environment
-// manager.
+// manager. If the iRODS password is an empty string, it is assumed that the iRODS
+// auth file is already present.
 func NewIRODSAccount(logger zerolog.Logger,
-	manager *icommands.ICommandsEnvironmentManager) (account *types.IRODSAccount, err error) { // NRV
+	manager *icommands.ICommandsEnvironmentManager,
+	password string) (account *types.IRODSAccount, err error) { // NRV
 	if account, err = manager.ToIRODSAccount(); err != nil {
 		logger.Err(err).Msg("Failed to obtain an iRODS account instance")
 		return nil, err
 	}
 
-	if err = InitIRODS(logger, manager); err != nil {
-		logger.Err(err).
-			Str("path", manager.GetPasswordFilePath()).
-			Msg("Failed to initialise iRODS")
-		return nil, err
+	if password != "" {
+		if err = InitIRODS(logger, manager, password); err != nil {
+			logger.Err(err).
+				Str("path", manager.GetPasswordFilePath()).
+				Msg("Failed to initialise iRODS")
+			return nil, err
+		}
 	}
 
 	logger.Info().
@@ -162,6 +152,7 @@ func NewIRODSAccount(logger zerolog.Logger,
 		Str("user", account.ClientUser).
 		Str("env_file", manager.GetEnvironmentFilePath()).
 		Str("auth_file", manager.GetPasswordFilePath()).
+		Bool("password", password != "").
 		Str("auth_scheme", string(account.AuthenticationScheme)).
 		Bool("cs_neg_required", account.ClientServerNegotiation).
 		Str("cs_neg_policy", string(account.CSNegotiationPolicy)).

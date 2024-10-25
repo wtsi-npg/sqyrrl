@@ -43,7 +43,7 @@ var _ = Describe("iRODS Get Handler", func() {
 	var testConfig server.Config
 	var testServer *server.SqyrrlServer
 
-	BeforeEach(func() {
+	BeforeEach(func(ctx SpecContext) {
 		// Put a test file into iRODS
 		testZone = "testZone"
 		rootColl = fmt.Sprintf("/%s/home/irods", testZone)
@@ -59,7 +59,13 @@ var _ = Describe("iRODS Get Handler", func() {
 		}
 
 		var err error
-		testServer, err = server.NewSqyrrlServer(suiteLogger, testConfig)
+		err = server.Configure(suiteLogger, &testConfig)
+		Expect(err).NotTo(HaveOccurred())
+
+		testServer, err = server.NewSqyrrlServer(suiteLogger, &testConfig)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = testServer.StartBackground()
 		Expect(err).NotTo(HaveOccurred())
 
 		err = irodsFS.MakeDir(workColl, true)
@@ -71,9 +77,10 @@ var _ = Describe("iRODS Get Handler", func() {
 
 		err = irodsFS.UploadFile(localPath, remotePath, "", false, nil)
 		Expect(err).NotTo(HaveOccurred())
-	})
+	}, NodeTimeout(time.Second*5))
 
 	AfterEach(func() {
+		testServer.Stop()
 		// Remove the test file from iRODS
 		err := irodsFS.RemoveDir(workColl, true, true)
 		Expect(err).NotTo(HaveOccurred())
@@ -84,7 +91,7 @@ var _ = Describe("iRODS Get Handler", func() {
 		var handler http.Handler
 		var err error
 
-		BeforeEach(func() {
+		BeforeEach(func(ctx SpecContext) {
 			handler, err = testServer.GetHandler(server.EndpointIRODS)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -94,14 +101,14 @@ var _ = Describe("iRODS Get Handler", func() {
 
 			r, err = http.NewRequest("GET", getURL, nil)
 			Expect(err).NotTo(HaveOccurred())
-		})
+		}, NodeTimeout(time.Second*2))
 
-		It("should return NotFound", func() {
+		It("should return NotFound", func(ctx SpecContext) {
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, r)
 
 			Expect(rec.Code).To(Equal(http.StatusNotFound))
-		})
+		}, SpecTimeout(time.Second*2))
 	})
 
 	When("a valid data object path is given", func() {
@@ -109,7 +116,7 @@ var _ = Describe("iRODS Get Handler", func() {
 		var handler http.Handler
 		var err error
 
-		BeforeEach(func() {
+		BeforeEach(func(ctx SpecContext) {
 			handler, err = testServer.GetHandler(server.EndpointIRODS)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -119,22 +126,22 @@ var _ = Describe("iRODS Get Handler", func() {
 
 			r, err = http.NewRequest("GET", getURL, nil)
 			Expect(err).NotTo(HaveOccurred())
-		})
+		}, NodeTimeout(time.Second*2))
 
 		When("the data object does not have public read permissions", func() {
-			It("should return Forbidden", func() {
+			It("should return Forbidden", func(ctx SpecContext) {
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)
 
 				Expect(rec.Code).To(Equal(http.StatusForbidden))
-			})
+			}, SpecTimeout(time.Second*2))
 		})
 
 		When("the data object has public read permissions", func() {
 			var conn *connection.IRODSConnection
 			var acl []*types.IRODSAccess
 
-			BeforeEach(func() {
+			BeforeEach(func(ctx SpecContext) {
 				handler, err = testServer.GetHandler(server.EndpointIRODS)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -166,26 +173,26 @@ var _ = Describe("iRODS Get Handler", func() {
 					}
 				}
 				Expect(publicAccess).To(BeTrue())
-			})
+			}, NodeTimeout(time.Second*5))
 
 			AfterEach(func() {
 				irodsFS.ReturnIOConnection(conn)
 			})
 
-			It("should return OK", func() {
+			It("should return OK", func(ctx SpecContext) {
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)
 
 				Expect(rec.Code).To(Equal(http.StatusOK))
-			})
+			}, SpecTimeout(time.Second*2))
 
-			It("should serve the correct body content", func() {
+			It("should serve the correct body content", func(ctx SpecContext) {
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, r)
 
 				Expect(rec.Code).To(Equal(http.StatusOK))
 				Expect(rec.Body.String()).To(Equal("test\n"))
-			})
+			}, SpecTimeout(time.Second*2))
 		})
 	})
 })

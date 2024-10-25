@@ -51,7 +51,7 @@ type ContextKey string
 // SqyrrlServer is an HTTP server which contains an embedded iRODS client.
 type SqyrrlServer struct {
 	http.Server
-	sqyrrlConfig    Config
+	sqyrrlConfig    *Config
 	oauth2Config    *oauth2.Config
 	oidcConfig      *oidc.Config
 	oidcProvider    *oidc.Provider
@@ -66,13 +66,19 @@ type SqyrrlServer struct {
 }
 
 type Config struct {
-	Host          string
-	Port          string
-	EnvFilePath   string // Path to the iRODS environment file
-	CertFilePath  string
-	KeyFilePath   string
-	EnableOIDC    bool
-	IndexInterval time.Duration
+	Host             string
+	Port             string
+	IRODSEnvFilePath string // Path to the iRODS environment file
+	IRODSPassword    string // Password for the iRODS account
+	CertFilePath     string
+	KeyFilePath      string
+	ConfigFilePath   string // Path to a TOML configuration file
+	EnableOIDC       bool
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCIssuerURL    string
+	OIDCRedirectURL  string
+	IndexInterval    time.Duration
 }
 
 const AppName = "sqyrrl"
@@ -84,7 +90,6 @@ const (
 
 const (
 	EnvClientID        = "OIDC_CLIENT_ID"
-	EnvClientSecret    = "OIDC_CLIENT_SECRET"
 	EnvOIDCIssuerURL   = "OIDC_ISSUER_URL"
 	EnvOIDCRedirectURL = "OIDC_CALLBACK_URL"
 )
@@ -125,7 +130,11 @@ func init() {
 //
 // The logger should be the root logger of the application. The server will create
 // sub-loggers for its components.
-func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer, err error) { // NRV
+//
+// The config argument should be initialised by calling Configure before passing it to
+// this function.
+func NewSqyrrlServer(logger zerolog.Logger, config *Config) (server *SqyrrlServer,
+	err error) { // NRV
 	if config.Host == "" {
 		return nil, fmt.Errorf("server sqyrrlConfig %w: host", ErrMissingArgument)
 	}
@@ -136,6 +145,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		return nil,
 			fmt.Errorf("server sqyrrlConfig %w: certificate file path", ErrMissingArgument)
 	}
+
 	if config.IndexInterval < MinIndexInterval {
 		logger.Warn().
 			Dur("interval", config.IndexInterval).
@@ -164,50 +174,43 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 	var oidcConfig *oidc.Config
 	var oidcProvider *oidc.Provider
 	var oauth2Config *oauth2.Config
-	var clientID, clientSecret, oidcIssuerURL, oidcRedirectURL string
-	var issuerURL, redirectURL *url.URL
 
 	if config.EnableOIDC {
-		if clientID, err = getEnv(EnvClientID); err != nil {
-			return nil, err
+		if config.OIDCClientID == "" {
+			return nil, fmt.Errorf("server config %w: OIDC client ID",
+				ErrMissingArgument)
 		}
-		if clientSecret, err = getEnv(EnvClientSecret); err != nil {
-			return nil, err
+		if config.OIDCClientSecret == "" {
+			return nil, fmt.Errorf("server config %w: OIDC client secret",
+				ErrMissingArgument)
 		}
-		if oidcIssuerURL, err = getEnv(EnvOIDCIssuerURL); err != nil {
-			return nil, err
+		if config.OIDCIssuerURL == "" {
+			return nil, fmt.Errorf("server config %w: OIDC issuer URL",
+				ErrMissingArgument)
 		}
-		if oidcRedirectURL, err = getEnv(EnvOIDCRedirectURL); err != nil {
-			return nil, err
+		if config.OIDCRedirectURL == "" {
+			return nil, fmt.Errorf("server config %w: OIDC redirect URL",
+				ErrMissingArgument)
 		}
 
 		oidcConfig = &oidc.Config{
-			ClientID: clientID,
+			ClientID: config.OIDCClientID,
 		}
 
-		// Parse the provided URLs to ensure they are valid
-		issuerURL, err = url.Parse(oidcIssuerURL)
-		if err != nil {
-			return nil, err
-		}
-		redirectURL, err = url.Parse(oidcRedirectURL)
-		if err != nil {
-			return nil, err
-		}
-		redirectURL, err = url.Parse(redirectURL.Scheme + "://" +
-			net.JoinHostPort(redirectURL.Hostname(), config.Port))
+		oidcProvider, err = oidc.NewProvider(context.Background(), config.OIDCIssuerURL)
 		if err != nil {
 			return nil, err
 		}
 
-		oidcProvider, err = oidc.NewProvider(context.Background(), issuerURL.String())
+		var redirectURL *url.URL
+		redirectURL, err = url.Parse(config.OIDCRedirectURL)
 		if err != nil {
 			return nil, err
 		}
 
 		oauth2Config = &oauth2.Config{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
+			ClientID:     config.OIDCClientID,
+			ClientSecret: config.OIDCClientSecret,
 			Endpoint:     oidcProvider.Endpoint(),
 			RedirectURL:  redirectURL.JoinPath(EndpointAuthCallback).String(),
 			Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
@@ -220,17 +223,13 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 	}
 
 	var iRODSEnvManager *icommands.ICommandsEnvironmentManager
-	if config.EnvFilePath == "" {
-		config.EnvFilePath = LookupIRODSEnvFilePath()
-	}
-
-	if iRODSEnvManager, err = NewICommandsEnvironmentManager(subLogger, config.EnvFilePath); err != nil {
+	if iRODSEnvManager, err = NewICommandsEnvironmentManager(subLogger, config.IRODSEnvFilePath); err != nil {
 		logger.Err(err).Msg("Failed to create an iRODS environment manager")
 		return nil, err
 	}
 
 	var iRODSAccount *types.IRODSAccount
-	if iRODSAccount, err = NewIRODSAccount(subLogger, iRODSEnvManager); err != nil {
+	if iRODSAccount, err = NewIRODSAccount(subLogger, iRODSEnvManager, config.IRODSPassword); err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")
 		return nil, err
 	}
@@ -284,7 +283,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		Str("port", config.Port).
 		Str("cert_file", config.CertFilePath).
 		Str("key_file", config.KeyFilePath).
-		Str("irods_env", config.EnvFilePath).
+		Str("irods_env", config.IRODSEnvFilePath).
 		Bool("oidc_enabled", config.EnableOIDC).
 		Str("cwd", cwd).
 		Dur("index_interval", config.IndexInterval).Msg("Server configured")
@@ -300,8 +299,10 @@ func (server *SqyrrlServer) IRODSAuthFilePath() string {
 	return server.iRODSEnvManager.GetPasswordFilePath()
 }
 
-// GetHandler returns the handler for the named endpoint. This is used for ease of testing
-// because it will return a handler configured with the server's session manager.
+// GetHandler returns the handler for the named endpoint.
+//
+// This is used for ease of testing because it will return a handler configured with the
+// server's session manager.
 func (server *SqyrrlServer) GetHandler(endpoint string) (http.Handler, error) {
 	// If the named handler is not in the handlers map, return an error
 	if handler, ok := server.handlers[endpoint]; ok {
@@ -317,6 +318,14 @@ func (server *SqyrrlServer) GetHandler(endpoint string) (http.Handler, error) {
 // to start or if it fails to stop cleanly (with http.ErrServerClosed).
 func (server *SqyrrlServer) Start() error {
 	var serveErr, shutErr error
+
+	config := server.sqyrrlConfig
+	for _, path := range []string{config.CertFilePath, config.KeyFilePath,
+		config.IRODSEnvFilePath} {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("server config %w: %s", err, path)
+		}
+	}
 
 	go func() {
 		logger := server.logger
@@ -358,6 +367,20 @@ func (server *SqyrrlServer) Start() error {
 	shutErr = server.waitAndShutdown()
 
 	return errors.Join(serveErr, shutErr)
+}
+
+// StartBackground starts the server in a goroutine. This function returns immediately.
+// The error is returned only if the server fails to start, otherwise it is nil. The
+// server can be stopped by calling the server's Stop function.
+func (server *SqyrrlServer) StartBackground() (err error) { // NRV
+	go func() {
+		err = server.Start()
+		if err != nil {
+			server.logger.Err(err).Msg("Error starting server")
+		}
+	}()
+
+	return err
 }
 
 // Stop stops the server. It provides a public means to call the server's cancel function.
@@ -470,34 +493,112 @@ func (server *SqyrrlServer) waitAndShutdown() (err error) { // NRV
 	return err
 }
 
-func ConfigureAndStart(logger zerolog.Logger, config Config) error {
-	if config.Host == "" {
-		return fmt.Errorf("server sqyrrlConfig %w: address", ErrMissingArgument)
-	}
-	if config.Port == "" {
-		return fmt.Errorf("server sqyrrlConfig %w: port", ErrMissingArgument)
-	}
-	if config.CertFilePath == "" {
-		return fmt.Errorf("server sqyrrlConfig %w: certificate file path", ErrMissingArgument)
-	}
-	if config.KeyFilePath == "" {
-		return fmt.Errorf("server sqyrrlConfig %w: key file path", ErrMissingArgument)
-	}
-	if !(config.IndexInterval > 0) {
-		return fmt.Errorf("server sqyrrlConfig %w: index interval", ErrMissingArgument)
+// Configure sets up the server configuration. This function reads the configuration
+// from the provided Config struct and updates it with values from the environment, if
+// they are not already set. This is for backwards compatibility with previous versions
+// of the server. It also validates and URLs provided in the configuration. If the
+// configuration is invalid, it returns an error.
+func Configure(logger zerolog.Logger, config *Config) error {
+	// Fall back to environment variables if the configuration file does not specify them
+	// and they are not overridden on the command line. This is for backwards compatibility
+	var err error
+
+	if config.EnableOIDC {
+		if config.OIDCClientID == "" {
+			var clientID string
+			clientID, err = getEnv(EnvClientID)
+			if err != nil {
+				return err
+			}
+			logger.Info().Str("client_id",
+				clientID).Msg("Configured OpenID Connect client ID from the environment")
+			config.OIDCClientID = clientID
+		}
+		if config.OIDCIssuerURL == "" {
+			var issuerURL string
+			issuerURL, err = getEnv(EnvOIDCIssuerURL)
+			if err != nil {
+				return err
+			}
+			logger.Info().Str("issuer_url",
+				issuerURL).Msg("Configured OpenID Connect issuer URL from the environment")
+			config.OIDCIssuerURL = issuerURL
+		}
+		if config.OIDCRedirectURL == "" {
+			var redirectURL string
+			redirectURL, err = getEnv(EnvOIDCRedirectURL)
+			if err != nil {
+				return err
+			}
+			logger.Info().Str("redirect_url",
+				redirectURL).Msg("Configured OpenID Connect redirect URL from the environment")
+			config.OIDCRedirectURL = redirectURL
+		}
+
+		// Parse the provided URLs to ensure they are valid
+		if config.OIDCIssuerURL != "" {
+			var issuerURL *url.URL
+			issuerURL, err = url.Parse(config.OIDCIssuerURL)
+			if err != nil {
+				return err
+			}
+			config.OIDCIssuerURL = issuerURL.String()
+		}
+		if config.OIDCRedirectURL != "" {
+			var redirectURL *url.URL
+			redirectURL, err = url.Parse(config.OIDCRedirectURL)
+			if err != nil {
+				return err
+			}
+
+			redirectURL, err = url.Parse(redirectURL.Scheme +
+				"://" + net.JoinHostPort(redirectURL.Hostname(), config.Port))
+			if err != nil {
+				return err
+			}
+			config.OIDCRedirectURL = redirectURL.String()
+		}
 	}
 
-	if server, err := NewSqyrrlServer(logger, config); err != nil {
-		return err
-	} else {
-		return server.Start()
+	if config.IRODSEnvFilePath == "" {
+		path := LookupIRODSEnvFilePath()
+		if path == "" {
+			logger.Error().
+				Msg("Failed to find the iRODS environment file path from the environment")
+		} else {
+			logger.Info().
+				Str("path", path).
+				Msg("Configured iRODS environment file path from the environment")
+		}
+		config.IRODSEnvFilePath = path
 	}
+
+	if config.Host == "" {
+		return fmt.Errorf("server config %w: address", ErrMissingArgument)
+	}
+	if config.Port == "" {
+		return fmt.Errorf("server config %w: port", ErrMissingArgument)
+	}
+	if config.CertFilePath == "" {
+		return fmt.Errorf("server config %w: certificate file path", ErrMissingArgument)
+	}
+	if config.KeyFilePath == "" {
+		return fmt.Errorf("server config %w: key file path", ErrMissingArgument)
+	}
+	if config.IRODSEnvFilePath == "" {
+		return fmt.Errorf("server config %w: iRODS environment file path", ErrMissingArgument)
+	}
+	if !(config.IndexInterval > 0) {
+		return fmt.Errorf("server config %w: index interval", ErrMissingArgument)
+	}
+
+	return err
 }
 
 func getEnv(envVar string) (string, error) {
 	val := os.Getenv(envVar)
 	if val == "" {
-		return "", fmt.Errorf("server sqyrrlConfig %w: %s",
+		return "", fmt.Errorf("server config %w: %s",
 			ErrEnvironmentVariableNotSet, envVar)
 	}
 	return val, nil

@@ -19,6 +19,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"io"
 	"os"
 	"strings"
@@ -35,9 +36,10 @@ import (
 var mainLogger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr})
 
 type cliFlags struct {
-	certFilePath string // Path to the certificate file
-	keyFilePath  string // Path to the key file
-	envFilePath  string // Path to the iRODS environment file
+	certFilePath   string // Path to the certificate file
+	keyFilePath    string // Path to the key file
+	envFilePath    string // Path to the iRODS environment file
+	configFilePath string // Path to a TOML configuration file
 
 	host  string // Address to listen on, host part
 	level string // Logging level
@@ -48,9 +50,7 @@ type cliFlags struct {
 	enableOIDC bool // Enable OpenID Connect authentication
 }
 
-var cliFlagsSelected = cliFlags{
-	host: "localhost",
-}
+var cliFlagsSelected = cliFlags{}
 
 // configureRootLogger configures the root logger for the application. It sets up common
 // fields for the application name, version, and process ID, and it sets the default log
@@ -118,18 +118,78 @@ func printHelp(cmd *cobra.Command, args []string) {
 	}
 }
 
-func startServer(cmd *cobra.Command, args []string) error {
+func startServer(cmd *cobra.Command, args []string) (err error) { // NRV
 	logger := configureRootLogger(&cliFlagsSelected)
 
-	return server.ConfigureAndStart(logger, server.Config{
-		Host:          cliFlagsSelected.host,
-		Port:          cliFlagsSelected.port,
-		CertFilePath:  cliFlagsSelected.certFilePath,
-		KeyFilePath:   cliFlagsSelected.keyFilePath,
-		EnvFilePath:   cliFlagsSelected.envFilePath,
-		EnableOIDC:    cliFlagsSelected.enableOIDC,
-		IndexInterval: cliFlagsSelected.indexInterval,
-	})
+	var config server.Config
+	if cliFlagsSelected.configFilePath != "" {
+		var tomlData []byte
+		if tomlData, err = os.ReadFile(cliFlagsSelected.configFilePath); err != nil {
+			return err
+		}
+
+		_, err = toml.Decode(string(tomlData), config)
+		if err != nil {
+			return err
+		}
+		logger.Info().Str("path", cliFlagsSelected.configFilePath).
+			Str("config", fmt.Sprintf("%v", config)).Msg("Config loaded")
+		config.ConfigFilePath = cliFlagsSelected.configFilePath
+	}
+
+	if cliFlagsSelected.host != "" {
+		config.Host = cliFlagsSelected.host
+		logger.Info().Str("host", config.Host).Msg(
+			"Configured host overridden on command line")
+	}
+	if cliFlagsSelected.port != "" {
+		config.Port = cliFlagsSelected.port
+		logger.Info().Str("port", config.Port).Msg(
+			"Configured port overridden on command line")
+	}
+	if cliFlagsSelected.certFilePath != "" {
+		config.CertFilePath = cliFlagsSelected.certFilePath
+		logger.Info().Str("path", config.CertFilePath).Msg(
+			"Configured certificate file path overridden on command line")
+	}
+	if cliFlagsSelected.keyFilePath != "" {
+		config.KeyFilePath = cliFlagsSelected.keyFilePath
+		logger.Info().Str("path", config.KeyFilePath).Msg(
+			"Configured key file path overridden on command line")
+	}
+	if cliFlagsSelected.envFilePath != "" {
+		config.IRODSEnvFilePath = cliFlagsSelected.envFilePath
+		logger.Info().Str("path", config.IRODSEnvFilePath).Msg(
+			"Configured iRODS environment file path overridden on command line")
+	}
+	if cliFlagsSelected.enableOIDC {
+		config.EnableOIDC = cliFlagsSelected.enableOIDC
+		logger.Info().Bool("enabled", config.EnableOIDC).Msg(
+			"Configured OpenID Connect authentication overridden on command line")
+	}
+	if cliFlagsSelected.indexInterval != 0 {
+		config.IndexInterval = cliFlagsSelected.indexInterval
+		logger.Info().Dur("interval", config.IndexInterval).Msg(
+			"Configured index interval overridden on command line")
+	}
+
+	err = server.Configure(logger, &config)
+	if err != nil {
+		return err
+	}
+
+	var srv *server.SqyrrlServer
+	srv, err = server.NewSqyrrlServer(logger, &config)
+	if err != nil {
+		return err
+	}
+
+	err = srv.Start()
+	if err != nil {
+		return err
+	}
+
+	return err
 }
 
 func CLI() {
@@ -152,10 +212,10 @@ func CLI() {
 		RunE:  startServer,
 	}
 	startCmd.Flags().StringVar(&cliFlagsSelected.host,
-		"host", "localhost",
+		"host", "",
 		"Address on which to listen, host part")
 	startCmd.Flags().StringVar(&cliFlagsSelected.port,
-		"port", "3333",
+		"port", "",
 		"Port on which to listen")
 	startCmd.Flags().StringVar(&cliFlagsSelected.certFilePath,
 		"cert-file", "",
@@ -164,8 +224,11 @@ func CLI() {
 		"key-file", "",
 		"Path to the SSL private key file")
 	startCmd.Flags().StringVar(&cliFlagsSelected.envFilePath,
-		"irods-env", server.LookupIRODSEnvFilePath(),
+		"irods-env", "",
 		"Path to the iRODS environment file")
+	startCmd.Flags().StringVar(&cliFlagsSelected.configFilePath,
+		"config", "",
+		"Path to a TOML configuration file")
 	startCmd.Flags().DurationVar(&cliFlagsSelected.indexInterval,
 		"index-interval", server.DefaultIndexInterval,
 		"Interval at which update the index")

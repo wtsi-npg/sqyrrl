@@ -1,0 +1,7 @@
+Host = "0.0.0.0"
+Port  = "3333"
+CertFilePath = "/app/config/localhost.crt"
+KeyFilePath = "/app/config/localhost.key"
+IRODSEnvFilePath = "/app/config/app_irods_environment.json"
+EnableOIDC  = false
+IndexInterval = "60s"
