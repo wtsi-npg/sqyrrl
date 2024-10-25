@@ -26,6 +26,7 @@ services:
                 "--key-file", "/app/config/localhost.key",
                 "--irods-env", "/app/config/app_irods_environment.json",
                 "--enable-oidc",
+                "--index-interval", "1h",
                 "--log-level", "trace"]
       # Set the following environment variables in a .env file (files named .env
       # are declared in .gitignore):
@@ -39,6 +40,7 @@ services:
       # OIDC_CLIENT_ID
       # OIDC_CLIENT_SECRET
       # OIDC_ISSUER_URL
+      # OIDC_CALLBACK_URL
       env_file: .env
       ports:
         - "3333:3333"

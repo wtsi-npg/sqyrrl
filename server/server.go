@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -82,9 +83,10 @@ const (
 )
 
 const (
-	EnvClientID     = "OIDC_CLIENT_ID"
-	EnvClientSecret = "OIDC_CLIENT_SECRET"
-	EnvOIDCIssuer   = "OIDC_ISSUER_URL"
+	EnvClientID        = "OIDC_CLIENT_ID"
+	EnvClientSecret    = "OIDC_CLIENT_SECRET"
+	EnvOIDCIssuerURL   = "OIDC_ISSUER_URL"
+	EnvOIDCRedirectURL = "OIDC_CALLBACK_URL"
 )
 
 const (
@@ -162,7 +164,8 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 	var oidcConfig *oidc.Config
 	var oidcProvider *oidc.Provider
 	var oauth2Config *oauth2.Config
-	var clientID, clientSecret, oidcIssuer string
+	var clientID, clientSecret, oidcIssuerURL, oidcRedirectURL string
+	var issuerURL, redirectURL *url.URL
 
 	if config.EnableOIDC {
 		if clientID, err = getEnv(EnvClientID); err != nil {
@@ -171,7 +174,10 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 		if clientSecret, err = getEnv(EnvClientSecret); err != nil {
 			return nil, err
 		}
-		if oidcIssuer, err = getEnv(EnvOIDCIssuer); err != nil {
+		if oidcIssuerURL, err = getEnv(EnvOIDCIssuerURL); err != nil {
+			return nil, err
+		}
+		if oidcRedirectURL, err = getEnv(EnvOIDCRedirectURL); err != nil {
 			return nil, err
 		}
 
@@ -179,7 +185,22 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 			ClientID: clientID,
 		}
 
-		oidcProvider, err = oidc.NewProvider(context.Background(), oidcIssuer)
+		// Parse the provided URLs to ensure they are valid
+		issuerURL, err = url.Parse(oidcIssuerURL)
+		if err != nil {
+			return nil, err
+		}
+		redirectURL, err = url.Parse(oidcRedirectURL)
+		if err != nil {
+			return nil, err
+		}
+		redirectURL, err = url.Parse(redirectURL.Scheme + "://" +
+			net.JoinHostPort(redirectURL.Hostname(), config.Port))
+		if err != nil {
+			return nil, err
+		}
+
+		oidcProvider, err = oidc.NewProvider(context.Background(), issuerURL.String())
 		if err != nil {
 			return nil, err
 		}
@@ -188,7 +209,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config Config) (server *SqyrrlServer
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 			Endpoint:     oidcProvider.Endpoint(),
-			RedirectURL:  "https://" + net.JoinHostPort("localhost", config.Port) + EndpointAuthCallback,
+			RedirectURL:  redirectURL.JoinPath(EndpointAuthCallback).String(),
 			Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 		}
 
