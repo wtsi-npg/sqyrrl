@@ -50,7 +50,9 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 		requestPath := r.URL.Path
 		requestMethod := r.Method
 
+		// Redirect all GET requests to the iRODS API
 		if requestPath != "/" && requestMethod == "GET" {
+			// No favicon.ico here. Prevent this redirecting to look in iRODS for it
 			if requestPath == "/favicon.ico" {
 				writeErrorResponse(logger, w, http.StatusNotFound)
 				return
@@ -213,6 +215,8 @@ func HandleAuthCallback(server *SqyrrlServer) http.Handler {
 			Str("name", claims.Name).
 			Str("email", claims.Email).
 			Msg("User logged in")
+
+		logger.Debug().Msg("Redirecting logged in user to home page")
 
 		http.Redirect(w, r, "/", http.StatusFound)
 	})

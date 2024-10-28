@@ -47,12 +47,13 @@ func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 	getStatic := http.StripPrefix(EndpointStatic, HandleStaticContent(server))
 	getObject := http.StripPrefix(EndpointIRODS, HandleIRODSGet(server))
 
+	// See the home page template for the login/logout button that POSTs to these endpoints
 	loginHandler := sm.LoadAndSave(correlate(logRequest(HandleLogin(server))))
-	server.addRoute(mux, "GET", EndpointLogin, loginHandler)
-
+	server.addRoute(mux, "POST", EndpointLogin, loginHandler)
 	logoutHandler := sm.LoadAndSave(correlate(logRequest(HandleLogout(server))))
 	server.addRoute(mux, "POST", EndpointLogout, logoutHandler)
 
+	// OIDC authentication callback endpoint
 	authCallbackHandler := sm.LoadAndSave(correlate(logRequest(HandleAuthCallback(server))))
 	server.addRoute(mux, "GET", EndpointAuthCallback, authCallbackHandler)
 
@@ -61,12 +62,12 @@ func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 	staticHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(getStatic))))
 	server.addRoute(mux, "GET", EndpointStatic, staticHandler)
 
-	// The endpoint used to access files in iRODS
+	// The API endpoint used to access files in iRODS
 	irodsGetHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(getObject))))
 	server.addRoute(mux, "GET", EndpointIRODS, irodsGetHandler)
 
 	// The root endpoint hosts a home page. Any requests relative to it are redirected
-	// to the API endpoint
+	// to the iRODS API endpoint
 	rootHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(HandleHomePage(server)))))
 	server.addRoute(mux, "GET", EndpointRoot, rootHandler)
 }
