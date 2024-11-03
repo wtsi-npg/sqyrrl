@@ -211,7 +211,8 @@ func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 		if effectiveUserZone == userZone &&
 			ac.UserName == userName &&
-			ac.AccessLevel == types.IRODSAccessLevelReadObject {
+			( ac.AccessLevel == types.IRODSAccessLevelReadObject ||
+			  ac.AccessLevel == types.IRODSAccessLevelOwner ) {
 			logger.Trace().
 				Str("path", rodsPath).
 				Str("user", userName).
