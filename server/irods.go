@@ -27,7 +27,6 @@ import (
 	ifs "github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
-	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/rs/zerolog"
 )
 
@@ -196,12 +195,8 @@ func NewIRODSAccount(logger zerolog.Logger,
 func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 	userZone string, userName string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
-	var pathZone string
 
 	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
-		return false, err
-	}
-	if pathZone, err = util.GetIRODSZone(rodsPath); err != nil {
 		return false, err
 	}
 
@@ -214,7 +209,7 @@ func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			effectiveUserZone = userZone
 		}
 
-		if effectiveUserZone == pathZone &&
+		if effectiveUserZone == userZone &&
 			ac.UserName == userName &&
 			ac.AccessLevel == types.IRODSAccessLevelReadObject {
 			logger.Trace().
