@@ -3,12 +3,13 @@ module sqyrrl
 go 1.23
 
 require (
+	github.com/BurntSushi/toml v1.4.0
 	github.com/alexedwards/scs/v2 v2.8.0
 	github.com/coreos/go-oidc/v3 v3.11.0
 	github.com/cyverse/go-irodsclient v0.14.4
 	github.com/microcosm-cc/bluemonday v1.0.26
 	github.com/onsi/ginkgo/v2 v2.21.0
-	github.com/onsi/gomega v1.34.2
+	github.com/onsi/gomega v1.35.1
 	github.com/rs/xid v1.6.0
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
@@ -17,7 +18,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.2 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
