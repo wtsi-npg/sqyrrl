@@ -15,15 +15,15 @@ build: build-linux build-darwin build-windows
 
 build-linux:
 	mkdir -p ${build_path}
-	GOOS=linux go build ${build_args} -o ${build_path}/sqyrrl-linux-${GOARCH} ./main.go
+	GOARCH=${GOARCH} GOOS=linux go build ${build_args} -o ${build_path}/sqyrrl-linux-${GOARCH} ./main.go
 
 build-darwin:
 	mkdir -p ${build_path}
-	GOOS=darwin go build ${build_args} -o ${build_path}/sqyrrl-darwin-${GOARCH} ./main.go
+	GOARCH=${GOARCH} GOOS=darwin go build ${build_args} -o ${build_path}/sqyrrl-darwin-${GOARCH} ./main.go
 
 build-windows:
 	mkdir -p ${build_path}
-	GOOS=windows go build ${build_args} -o ${build_path}/sqyrrl-windows-${GOARCH}.exe ./main.go
+	GOARCH=${GOARCH} GOOS=windows go build ${build_args} -o ${build_path}/sqyrrl-windows-${GOARCH}.exe ./main.go
 
 install:
 	go install ${build_args}
