@@ -21,7 +21,7 @@ with appropriate authorisation. In addition to the limitations imposed by the iR
 used directly by the server, the server itself may be configured use OpenID Connect for
 HTTP client authentication. In this case, the user must also be authenticated by the OIDC
 provider and Sqyrrl will only serve data that the user has access to. OIDC user identity is
-mapped to and iRODS user account by user name.
+mapped to an iRODS user account by user name.
 
 If the server is started without OIDC enabled, it will serve only data that is explicitly
 set to be readable by the `public` iRODS user.
