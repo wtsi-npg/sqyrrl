@@ -128,7 +128,7 @@ func startServer(cmd *cobra.Command, args []string) (err error) { // NRV
 			return err
 		}
 
-		_, err = toml.Decode(string(tomlData), config)
+		_, err = toml.Decode(string(tomlData), &config)
 		if err != nil {
 			return err
 		}
