@@ -20,7 +20,9 @@ package cmd
 import (
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/alexedwards/scs/v2"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -178,8 +180,18 @@ func startServer(cmd *cobra.Command, args []string) (err error) { // NRV
 		return err
 	}
 
+	// Server-side storage of session data, keyed on a random session ID exchanged with
+	// the client
+	sessManager := scs.New()
+	sessManager.Cookie.Name = "sqyrrl-session"         // Session cookie name
+	sessManager.Cookie.HttpOnly = true                 // Don't let JS access the cookie
+	sessManager.Cookie.Persist = false                 // Don't allow the session to persist across browser sessions
+	sessManager.Cookie.SameSite = http.SameSiteLaxMode // Can't use Strict because of the OAuth2 callback
+	sessManager.Cookie.Secure = true                   // Require HTTPS because SameSite can't be Strict
+	sessManager.Lifetime = 10 * time.Minute            // Session lifetime
+
 	var srv *server.SqyrrlServer
-	srv, err = server.NewSqyrrlServer(logger, &config)
+	srv, err = server.NewSqyrrlServer(logger, &config, sessManager)
 	if err != nil {
 		return err
 	}

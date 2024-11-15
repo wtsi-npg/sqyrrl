@@ -2,12 +2,13 @@
 services:
     irods-server:
       container_name: irods-server
-      image: "ghcr.io/wtsi-npg/ub-16.04-irods-4.2.7:latest"
+      # image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3.2:latest"
+      image: "wsinpg/ub-22.04-irods-4.3.3"
       platform: linux/amd64
       ports:
         - "127.0.0.1:1247:1247"
         - "127.0.0.1:20000-20199:20000-20199"
-      restart: always
+      restart: on-failure
       healthcheck:
         test: ["CMD", "nc", "-z", "-v", "127.0.0.1", "1247"]
         start_period: 30s
@@ -25,11 +26,7 @@ services:
       # The following environment variables may be set in a .env file (files named .env
       # are declared in .gitignore):
       #
-      # If no iRODS auth file is provided:
-      #
-      # IRODS_PASSWORD
-      #
-      # And if using OIDC:
+      # If using OIDC:
       #
       # OIDC_CLIENT_ID
       # OIDC_ISSUER_URL

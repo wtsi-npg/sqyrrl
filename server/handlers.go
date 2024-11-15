@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"io/fs"
 	"net/http"
+	"net/http/httputil"
 	"path"
 	"time"
 
@@ -111,6 +112,9 @@ func HandleLogin(server *SqyrrlServer) http.Handler {
 		logger := server.logger
 		logger.Trace().Msg("LoginHandler called")
 
+		req, _ := httputil.DumpRequest(r, true)
+		logger.Trace().Str("request", string(req)).Msg("HandleLogin request")
+
 		if !server.sqyrrlConfig.EnableOIDC {
 			logger.Error().Msg("OIDC is not enabled")
 			writeErrorResponse(logger, w, http.StatusForbidden)
@@ -121,10 +125,19 @@ func HandleLogin(server *SqyrrlServer) http.Handler {
 
 		state, err := cryptoRandString(16) // Minimum 128 bits required
 		if err != nil {
+			logger.Err(err).Msg("Failed to generate a random state")
 			writeErrorResponse(logger, w, http.StatusInternalServerError)
 			return
 		}
-		server.sessionManager.Put(r.Context(), sessionKeyState, state)
+
+		// https://github.com/OWASP/CheatSheetSeries/blob/master/cheatsheets/Session_Management_Cheat_Sheet.md#renew-the-session-id-after-any-privilege-level-change
+		err = server.sessionManager.RenewToken(r.Context())
+		if err != nil {
+			logger.Err(err).Msg("Failed to renew session token")
+			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			return
+		}
+		server.sessionManager.Put(r.Context(), SessionKeyState, state)
 
 		authURL := server.oauth2Config.AuthCodeURL(state)
 		logger.Info().
@@ -145,13 +158,16 @@ func HandleAuthCallback(server *SqyrrlServer) http.Handler {
 		logger := server.logger
 		logger.Trace().Msg("AuthCallbackHandler called")
 
+		req, _ := httputil.DumpRequest(r, true)
+		logger.Trace().Str("request", string(req)).Msg("HandleAuthCallback request")
+
 		if !server.sqyrrlConfig.EnableOIDC {
 			logger.Error().Msg("OIDC is not enabled")
 			writeErrorResponse(logger, w, http.StatusForbidden)
 			return
 		}
 
-		state := server.sessionManager.GetString(r.Context(), sessionKeyState)
+		state := server.sessionManager.GetString(r.Context(), SessionKeyState)
 		if state == "" {
 			logger.Error().Msg("Failed to get a state cookie")
 			writeErrorResponse(logger, w, http.StatusBadRequest)
@@ -289,19 +305,9 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 		objPath := path.Clean(path.Join("/", r.URL.Path))
 		logger.Debug().Str("path", objPath).Msg("Getting iRODS data object")
 
-		var userID string
-		if server.isAuthenticated(r) {
-			userID = iRODSUserIDFromEmail(logger, server.getSessionUserEmail(r))
-		} else {
-			userID = IRODSPublicUser
-		}
-
-		userZone := server.iRODSAccount.ClientZone
-
 		var err error
 		var rodsFs *ifs.FileSystem
-		if rodsFs, err = ifs.NewFileSystemWithDefault(server.iRODSAccount,
-			AppName); err != nil {
+		if rodsFs, err = ifs.NewFileSystemWithDefault(server.iRODSAccount, AppName); err != nil {
 			logger.Err(err).Msg("Failed to create an iRODS file system")
 			writeErrorResponse(logger, w, http.StatusInternalServerError)
 			return
@@ -332,22 +338,46 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 			return
 		}
 
-		var isReadable bool
-		isReadable, err = isReadableByUser(logger, rodsFs, userZone, userID, objPath)
-		if err != nil {
-			logger.Err(err).Msg("Failed to check if the object is readable")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
-			return
-		}
+		userZone := server.iRODSAccount.ClientZone
 
-		if !isReadable {
-			logger.Info().
-				Str("path", objPath).
-				Str("id", userID).
-				Str("zone", userZone).
-				Msg("Requested path is not readable by this user")
-			writeErrorResponse(logger, w, http.StatusForbidden)
-			return
+		var isReadable bool
+
+		if server.isAuthenticated(r) {
+			userName := iRODSUsernameFromEmail(logger, server.getSessionUserEmail(r))
+			logger.Debug().Str("user", userName).Msg("User is authenticated")
+
+			isReadable, err = IsReadableByUser(logger, rodsFs, userName, userZone, objPath)
+			if err != nil {
+				logger.Err(err).Msg("Failed to check if the object is readable")
+				writeErrorResponse(logger, w, http.StatusInternalServerError)
+				return
+			}
+
+			if !isReadable {
+				logger.Info().
+					Str("path", objPath).
+					Str("user", userName).
+					Str("zone", userZone).
+					Msg("Requested path is not readable by this user")
+				writeErrorResponse(logger, w, http.StatusForbidden)
+				return
+			}
+		} else {
+			logger.Debug().Msg("User is not authenticated")
+			isReadable, err = IsPublicReadable(logger, rodsFs, userZone, objPath)
+			if err != nil {
+				logger.Err(err).Msg("Failed to check if the object is public readable")
+				writeErrorResponse(logger, w, http.StatusInternalServerError)
+				return
+			}
+
+			if !isReadable {
+				logger.Info().
+					Str("path", objPath).
+					Msg("Requested path is not public readable")
+				writeErrorResponse(logger, w, http.StatusForbidden)
+				return
+			}
 		}
 
 		getFileRange(rodsLogger, w, r, rodsFs, objPath)

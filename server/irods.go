@@ -22,10 +22,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/cyverse/go-irodsclient/config"
 	ifs "github.com/cyverse/go-irodsclient/fs"
-	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/rs/zerolog"
@@ -34,7 +36,8 @@ import (
 const (
 	IRODSEnvFileDefault = "~/.irods/irods_environment.json"
 	IRODSEnvFileEnvVar  = "IRODS_ENVIRONMENT_FILE"
-	IRODSPublicUser     = "public"
+
+	IRODSPublicGroup = "public"
 )
 
 const (
@@ -68,19 +71,22 @@ func LookupIRODSEnvFilePath() string {
 // InitIRODS initialises the iRODS environment by creating a populated auth file if it
 // does not already exist. This avoids the need to have `iinit` present on the server
 // host.
-func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentManager,
+func InitIRODS(logger zerolog.Logger, manager *config.ICommandsEnvironmentManager,
 	password string) (err error) {
 	if password == "" {
 		return fmt.Errorf("password was empty: %w", ErrInvalidArgument)
 	}
-	manager.Password = password
 
-	authFilePath := manager.GetPasswordFilePath()
+	obfuscator := config.NewPasswordObfuscator()
+	obfuscator.SetUID(manager.UID)
+
+	manager.Environment.Password = password
+	authFilePath := manager.PasswordFilePath
 	if _, err = os.Stat(authFilePath); err != nil && os.IsNotExist(err) {
 		logger.Info().
 			Str("path", authFilePath).
 			Msg("No iRODS auth file present; writing one now")
-		return icommands.EncodePasswordFile(authFilePath, manager.Password, os.Getuid())
+		return obfuscator.EncodeToFile(authFilePath, []byte(password))
 	}
 	return err
 }
@@ -91,7 +97,7 @@ func InitIRODS(logger zerolog.Logger, manager *icommands.ICommandsEnvironmentMan
 // shell environment. If an iRODS auth file is present, the password is read from it.
 // Otherwise, the password is read from the shell environment.
 func NewICommandsEnvironmentManager(logger zerolog.Logger,
-	iRODSEnvFilePath string) (manager *icommands.ICommandsEnvironmentManager, err error) {
+	iRODSEnvFilePath string) (manager *config.ICommandsEnvironmentManager, err error) {
 	if iRODSEnvFilePath == "" {
 		return nil, fmt.Errorf("iRODS environment file path was empty: %w",
 			ErrInvalidArgument)
@@ -107,13 +113,14 @@ func NewICommandsEnvironmentManager(logger zerolog.Logger,
 		return nil, fmt.Errorf("iRODS environment file is a directory: %w",
 			ErrInvalidArgument)
 	}
-	if manager, err = icommands.CreateIcommandsEnvironmentManager(); err != nil {
+	if manager, err = config.NewICommandsEnvironmentManager(); err != nil {
 		return nil, err
 	}
 	if err = manager.SetEnvironmentFilePath(iRODSEnvFilePath); err != nil {
 		return nil, err
 	}
-	if err = manager.Load(os.Getpid()); err != nil {
+
+	if err = manager.Load(); err != nil {
 		return nil, err
 	}
 
@@ -128,8 +135,7 @@ func NewICommandsEnvironmentManager(logger zerolog.Logger,
 // configuration. The environment file path is obtained from the iRODS environment
 // manager. If the iRODS password is an empty string, it is assumed that the iRODS
 // auth file is already present.
-func NewIRODSAccount(logger zerolog.Logger,
-	manager *icommands.ICommandsEnvironmentManager,
+func NewIRODSAccount(logger zerolog.Logger, manager *config.ICommandsEnvironmentManager,
 	password string) (account *types.IRODSAccount, err error) { // NRV
 	if account, err = manager.ToIRODSAccount(); err != nil {
 		logger.Err(err).Msg("Failed to obtain an iRODS account instance")
@@ -139,7 +145,7 @@ func NewIRODSAccount(logger zerolog.Logger,
 	if password != "" {
 		if err = InitIRODS(logger, manager, password); err != nil {
 			logger.Err(err).
-				Str("path", manager.GetPasswordFilePath()).
+				Str("path", manager.PasswordFilePath).
 				Msg("Failed to initialise iRODS")
 			return nil, err
 		}
@@ -150,8 +156,8 @@ func NewIRODSAccount(logger zerolog.Logger,
 		Int("port", account.Port).
 		Str("zone", account.ClientZone).
 		Str("user", account.ClientUser).
-		Str("env_file", manager.GetEnvironmentFilePath()).
-		Str("auth_file", manager.GetPasswordFilePath()).
+		Str("env_file", manager.EnvironmentFilePath).
+		Str("auth_file", manager.PasswordFilePath).
 		Bool("password", password != "").
 		Str("auth_scheme", string(account.AuthenticationScheme)).
 		Bool("cs_neg_required", account.ClientServerNegotiation).
@@ -160,8 +166,6 @@ func NewIRODSAccount(logger zerolog.Logger,
 		Str("ca_cert_file", account.SSLConfiguration.CACertificateFile).
 		Str("enc_alg", account.SSLConfiguration.EncryptionAlgorithm).
 		Int("key_size", account.SSLConfiguration.EncryptionKeySize).
-		Int("salt_size", account.SSLConfiguration.SaltSize).
-		Int("hash_rounds", account.SSLConfiguration.HashRounds).
 		Msg("iRODS account created")
 
 	// Before returning the account, check that it is usable by connecting to the
@@ -186,15 +190,18 @@ func NewIRODSAccount(logger zerolog.Logger,
 	return account, err
 }
 
-// isReadableByUser checks if the data object at the given path is readable by the
+// IsReadableByUser checks if the data object at the given path is readable by the
 // given user in the zone hosting the file.
 //
 // If iRODS is federated, there may be multiple zones, each with their own users.
 // The zone argument is the zone of user whose read permission is to be checked,
 // which is normally the current zone. This is consulted only if the ACL user zone is
 // empty.
-func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
-	userZone string, userName string, rodsPath string) (_ bool, err error) {
+//
+// A file is considered readable if the user has read access or is in a group that has
+// read access.
+func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
+	userName string, userZone string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
 	var pathZone string
 
@@ -205,6 +212,28 @@ func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		return false, err
 	}
 
+	var userGroups []*types.IRODSUser
+	userGroups, err = filesystem.ListUserGroups(userName)
+	if err != nil {
+		return false, err
+	}
+
+	groupNames := make([]string, 0, len(userGroups))
+	userGroupLookup := make(map[string]struct{}, len(userGroups))
+	for _, group := range userGroups {
+		groupNames = append(groupNames, group.Name)
+		userGroupLookup[group.Name] = struct{}{}
+	}
+	slices.Sort(groupNames)
+
+	logger.Trace().
+		Str("path", rodsPath).
+		Str("user", userName).
+		Str("zone", userZone).
+		Int("num_groups", len(userGroups)).
+		Str("groups", fmt.Sprintf("[%v]", strings.Join(groupNames, ", "))).
+		Msg("Checking read access")
+
 	for _, ac := range acl {
 		// ACL user zone may be empty if it refers to the local zone
 		var effectiveUserZone string
@@ -214,16 +243,59 @@ func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			effectiveUserZone = userZone
 		}
 
-		if effectiveUserZone == pathZone &&
-			ac.UserName == userName &&
-			ac.AccessLevel == types.IRODSAccessLevelReadObject {
+		hasRead := ac.AccessLevel == types.IRODSAccessLevelReadObject
+		hasOwn := ac.AccessLevel == types.IRODSAccessLevelOwner
+
+		// There is permission directly for the user
+		if ac.UserType == types.IRODSUserRodsUser || ac.UserType == types.IRODSUserRodsAdmin {
+			if effectiveUserZone == pathZone && ac.UserName == userName && (hasRead || hasOwn) {
+				logger.Trace().
+					Str("path", rodsPath).
+					Str("user", userName).
+					Str("zone", userZone).
+					Str("effective_zone", effectiveUserZone).
+					Str("ac_user", ac.UserName).
+					Str("ac_level", string(ac.AccessLevel)).
+					Bool("read", hasRead).
+					Bool("own", hasOwn).
+					Msg("User access found")
+
+				return true, nil
+			}
+
 			logger.Trace().
 				Str("path", rodsPath).
 				Str("user", userName).
 				Str("zone", userZone).
-				Msg("Read access found")
+				Str("ac_user", ac.UserName).
+				Str("effective_zone", effectiveUserZone).
+				Str("path_zone", pathZone).
+				Str("ac_level", string(ac.AccessLevel)).
+				Bool("read", hasRead).
+				Bool("own", hasOwn).
+				Msg("User read access not found")
+		}
 
-			return true, nil
+		// There is permission for a group the user is in
+		if ac.UserType == types.IRODSUserRodsGroup {
+			// Check if user in the group of this AC (ac.UserName is the name of the AC's group, unfortunately)
+			_, userInGroup := userGroupLookup[ac.UserName]
+
+			if effectiveUserZone == pathZone && userInGroup && (hasRead || hasOwn) {
+				logger.Trace().
+					Str("path", rodsPath).
+					Str("user", userName).
+					Str("zone", userZone).
+					Str("effective_zone", effectiveUserZone).
+					Str("ac_user", ac.UserName).
+					Str("ac_level", string(ac.AccessLevel)).
+					Bool("read", hasRead).
+					Bool("own", hasOwn).
+					Bool("user_in_group", userInGroup).
+					Msg("Group access found")
+
+				return true, nil
+			}
 		}
 	}
 
@@ -231,8 +303,57 @@ func isReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		Str("path", rodsPath).
 		Str("user", userName).
 		Str("zone", userZone).
-		Msg("Read access not found")
+		Msg("No access found")
 
+	return false, nil
+}
+
+func UserInGroup(logger zerolog.Logger, filesystem *ifs.FileSystem,
+	userName string, userZone string, groupName string) (_ bool, err error) {
+	var groups []*types.IRODSUser
+	if groups, err = filesystem.ListUserGroups(userName); err != nil {
+		return false, err
+	}
+
+	for _, group := range groups {
+		logger.Trace().
+			Str("user", userName).
+			Str("zone", userZone).
+			Str("group", group.Name).
+			Msg("Checking user group")
+
+		if group.Zone == "" {
+			return group.Name == groupName, nil
+		}
+
+		return group.Zone == userZone && group.Name == groupName, nil
+	}
+
+	return false, nil
+}
+
+func IsPublicReadable(logger zerolog.Logger, filesystem *ifs.FileSystem,
+	userZone string, rodsPath string) (_ bool, err error) {
+	var acl []*types.IRODSAccess
+	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
+		return false, err
+	}
+
+	for _, ac := range acl {
+		if ac.UserName == IRODSPublicGroup &&
+			ac.UserZone == userZone &&
+			(ac.AccessLevel == types.IRODSAccessLevelReadObject ||
+				ac.AccessLevel == types.IRODSAccessLevelOwner) {
+			logger.Trace().
+				Str("path", rodsPath).
+				Str("user", IRODSPublicGroup).
+				Msg("Public read access found")
+
+			return true, nil
+		}
+	}
+
+	logger.Trace().Str("path", rodsPath).Msg("No public read access found")
 	return false, nil
 }
 
