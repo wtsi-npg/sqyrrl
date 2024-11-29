@@ -4,7 +4,7 @@ build_args := -a -v -ldflags ${ldflags}
 
 build_path = build/sqyrrl-${VERSION}
 
-GOARCH := amd64
+GOARCH := $(shell go env GOARCH)
 
 CGO_ENABLED := 1
 
