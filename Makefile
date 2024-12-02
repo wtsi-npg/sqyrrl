@@ -4,7 +4,7 @@ build_args := -a -v -ldflags ${ldflags}
 
 build_path = build/sqyrrl-${VERSION}
 
-GOARCH := $(shell go env GOARCH)
+export GOARCH := $(shell go env GOARCH)
 
 CGO_ENABLED := 1
 
@@ -14,17 +14,17 @@ all: build
 
 build: build-linux build-darwin build-windows
 
-build-linux: GOOS = linux
+build-linux: export GOOS = linux
 build-linux:
 	mkdir -p ${build_path}
 	go build ${build_args} -o ${build_path}/sqyrrl-${GOOS}-${GOARCH} ./main.go
 
-build-darwin: GOOS = darwin
+build-darwin: export GOOS = darwin
 build-darwin:
 	mkdir -p ${build_path}
 	go build ${build_args} -o ${build_path}/sqyrrl-${GOOS}-${GOARCH} ./main.go
 
-build-windows: GOOS = windows
+build-windows: export GOOS = windows
 build-windows:
 	mkdir -p ${build_path}
 	go build ${build_args} -o ${build_path}/sqyrrl-${GOOS}-${GOARCH}.exe ./main.go
