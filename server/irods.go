@@ -315,18 +315,30 @@ func UserInGroup(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		return false, err
 	}
 
+	// IRODSUser isn't comparable. Make sure they are handled in a predictable order
+	groupLookup := make(map[string]*types.IRODSUser, len(groups))
+	groupNames := make([]string, 0, len(groups))
 	for _, group := range groups {
+		groupLookup[group.Name] = group
+		groupNames = append(groupNames, group.Name)
+	}
+	slices.Sort(groupNames)
+
+	for _, name := range groupNames {
+		group := groupLookup[name]
+		ok := (group.Zone == "" || group.Zone == userZone) && group.Name == groupName
+
 		logger.Trace().
 			Str("user", userName).
 			Str("zone", userZone).
-			Str("group", group.Name).
+			Str("query_group", groupName).
+			Str("actual_group", group.Name).
+			Bool("in", ok).
 			Msg("Checking user group")
 
-		if group.Zone == "" {
-			return group.Name == groupName, nil
+		if ok {
+			return true, nil
 		}
-
-		return group.Zone == userZone && group.Name == groupName, nil
 	}
 
 	return false, nil

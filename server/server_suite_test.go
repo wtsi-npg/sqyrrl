@@ -26,6 +26,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -59,6 +60,10 @@ var (
 
 	userInPublic    = "user_in_public"
 	userNotInPublic = "user_not_in_public"
+
+	// This is to test cases where a user is a member of multiple groups
+	otherGroups  = []string{"group_1", "group_2", "group_3", "group_4", "group_5"}
+	userInOthers = "user_in_others"
 
 	sqyrrlConfig server.Config
 	sessManager  *scs.SessionManager
@@ -118,7 +123,7 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 		}
 	}(irodsFS, suiteConn)
 
-	testUsers := []string{userInPublic, userNotInPublic}
+	testUsers := []string{userInPublic, userNotInPublic, userInOthers}
 	currentUsers := make(map[string]struct{})
 
 	var users []*types.IRODSUser
@@ -136,7 +141,7 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 		}
 	}
 
-	testGroups := []string{emptyGroup, populatedGroup}
+	testGroups := slices.Concat([]string{emptyGroup, populatedGroup}, otherGroups)
 	currentGroups := make(map[string]struct{})
 
 	var groups []*types.IRODSUser
@@ -184,6 +189,15 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 		Expect(err).NotTo(HaveOccurred())
 	}
 
+	// Ensure userInOthers is in all the other groups
+	for _, group := range otherGroups {
+		inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userInOthers, testZone, group)
+		Expect(err).NotTo(HaveOccurred())
+		if !inGroup {
+			err = ifs.AddGroupMember(suiteConn, group, userInOthers, testZone)
+		}
+	}
+
 	// Replace irodsFS with a new instance to clear the cache
 	irodsFS.Release()
 	irodsFS, err = fs.NewFileSystemWithDefault(account, suiteName)
@@ -201,6 +215,12 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userNotInPublic, testZone, populatedGroup)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(inGroup).To(BeTrue())
+
+	for _, group := range otherGroups {
+		inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userInOthers, testZone, group)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(inGroup).To(BeTrue())
+	}
 
 	// OIDC is not enabled for testing. We test for authenticated cases by creating
 	// a session manager and populating it with a session that simulates OIDC

@@ -83,6 +83,21 @@ var _ = Describe("iRODS functions", func() {
 		})
 	})
 
+	When("a user is given", func() {
+		When("the user is on multiple groups", func() {
+			It("should detect when the user is in a group", func() {
+				for _, group := range otherGroups {
+					inGroup, err := server.UserInGroup(suiteLogger, irodsFS, userInOthers, testZone, group)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(inGroup).To(BeTrue())
+				}
+				inGroup, err := server.UserInGroup(suiteLogger, irodsFS, userInOthers, testZone, emptyGroup)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(inGroup).To(BeFalse())
+			})
+		})
+	})
+
 	When("a valid data object path is given", func() {
 		When("the data object has no permissions for the public group", func() {
 			BeforeEach(func(ctx SpecContext) {
@@ -153,6 +168,34 @@ var _ = Describe("iRODS functions", func() {
 			})
 
 			When("the user is not in the public group", func() {
+				It("should return false", func() {
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userNotInPublic,
+						zone, remotePath)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(readable).To(BeFalse())
+				})
+			})
+		})
+
+		When("the data object has read permissions for several groups", func() {
+			BeforeEach(func(ctx SpecContext) {
+				for _, group := range otherGroups {
+					err = ifs.ChangeDataObjectAccess(conn, remotePath,
+						types.IRODSAccessLevelReadObject, group, testZone, false)
+					Expect(err).NotTo(HaveOccurred())
+				}
+			})
+
+			When("the user is in one of the groups", func() {
+				It("should return true", func() {
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userInOthers,
+						zone, remotePath)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(readable).To(BeTrue())
+				})
+			})
+
+			When("the user is not in one of the groups", func() {
 				It("should return false", func() {
 					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userNotInPublic,
 						zone, remotePath)
