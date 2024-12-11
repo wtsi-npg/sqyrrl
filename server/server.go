@@ -38,8 +38,8 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/coreos/go-oidc/v3/oidc"
+	iconfig "github.com/cyverse/go-irodsclient/config"
 	"github.com/cyverse/go-irodsclient/fs"
-	"github.com/cyverse/go-irodsclient/icommands"
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/rs/zerolog"
@@ -56,13 +56,14 @@ type SqyrrlServer struct {
 	oidcConfig      *oidc.Config
 	oidcProvider    *oidc.Provider
 	sessionManager  *scs.SessionManager
-	handlers        map[string]http.Handler                // The HTTP handlers, to simplify testing
-	context         context.Context                        // Context for clean shutdown
-	cancel          context.CancelFunc                     // Cancel function for the server
-	logger          zerolog.Logger                         // Base logger from which the server creates its own sub-loggers
-	iRODSEnvManager *icommands.ICommandsEnvironmentManager // iRODS environment manager for the embedded client
-	iRODSAccount    *types.IRODSAccount                    // iRODS account for the embedded client
-	iRODSIndex      *ItemIndex                             // ItemIndex of items in the iRODS server
+	handlers        map[string]http.Handler              // The HTTP handlers, to simplify testing
+	context         context.Context                      // Context for clean shutdown
+	cancel          context.CancelFunc                   // Cancel function for the server
+	logger          zerolog.Logger                       // Base logger from which the server creates its own sub-loggers
+	iRODSEnvManager *iconfig.ICommandsEnvironmentManager // iRODS environment manager for
+	// the embedded client
+	iRODSAccount *types.IRODSAccount // iRODS account for the embedded client
+	iRODSIndex   *ItemIndex          // ItemIndex of items in the iRODS server
 }
 
 type Config struct {
@@ -95,10 +96,10 @@ const (
 )
 
 const (
-	sessionKeyState       = "state"
-	sessionKeyAccessToken = "access_token"
-	sessionKeyUserEmail   = "user_email"
-	sessionKeyUserName    = "user_name"
+	SessionKeyState       = "state"
+	SessionKeyAccessToken = "access_token"
+	SessionKeyUserEmail   = "user_email"
+	SessionKeyUserName    = "user_name"
 )
 
 const correlationIDKey = ContextKey("correlation_id")
@@ -133,7 +134,8 @@ func init() {
 //
 // The config argument should be initialised by calling Configure before passing it to
 // this function.
-func NewSqyrrlServer(logger zerolog.Logger, config *Config) (server *SqyrrlServer,
+func NewSqyrrlServer(logger zerolog.Logger, config *Config,
+	sessionManager *scs.SessionManager) (server *SqyrrlServer,
 	err error) { // NRV
 	if config.Host == "" {
 		return nil, fmt.Errorf("server sqyrrlConfig %w: host", ErrMissingArgument)
@@ -222,7 +224,7 @@ func NewSqyrrlServer(logger zerolog.Logger, config *Config) (server *SqyrrlServe
 			Msg("OIDC provider configured")
 	}
 
-	var iRODSEnvManager *icommands.ICommandsEnvironmentManager
+	var iRODSEnvManager *iconfig.ICommandsEnvironmentManager
 	if iRODSEnvManager, err = NewICommandsEnvironmentManager(subLogger, config.IRODSEnvFilePath); err != nil {
 		logger.Err(err).Msg("Failed to create an iRODS environment manager")
 		return nil, err
@@ -237,15 +239,6 @@ func NewSqyrrlServer(logger zerolog.Logger, config *Config) (server *SqyrrlServe
 	addr := net.JoinHostPort(config.Host, config.Port)
 	mux := http.NewServeMux()
 	serverCtx, cancelServer := context.WithCancel(context.Background())
-
-	// Server-side storage of session data, keyed on a random session ID exchanged with
-	// the client
-	sessionManager := scs.New()
-	sessionManager.Cookie.Name = "sqyrrl-session"         // Session cookie name
-	sessionManager.Cookie.HttpOnly = true                 // Don't let JS access the cookie
-	sessionManager.Cookie.Persist = true                  // Allow the session to persist across browser sessions
-	sessionManager.Cookie.SameSite = http.SameSiteLaxMode // Can't use Strict because of the OAuth2 callback
-	sessionManager.Cookie.Secure = true                   // Require HTTPS because SameSite can't be Strict
 
 	server = &SqyrrlServer{
 		http.Server{
@@ -292,11 +285,11 @@ func NewSqyrrlServer(logger zerolog.Logger, config *Config) (server *SqyrrlServe
 }
 
 func (server *SqyrrlServer) IRODSEnvFilePath() string {
-	return server.iRODSEnvManager.GetEnvironmentFilePath()
+	return server.iRODSEnvManager.EnvironmentFilePath
 }
 
 func (server *SqyrrlServer) IRODSAuthFilePath() string {
-	return server.iRODSEnvManager.GetPasswordFilePath()
+	return server.iRODSEnvManager.PasswordFilePath
 }
 
 // GetHandler returns the handler for the named endpoint.
@@ -456,27 +449,27 @@ func (server *SqyrrlServer) isAuthenticated(r *http.Request) bool {
 }
 
 func (server *SqyrrlServer) getSessionAccessToken(r *http.Request) string {
-	return server.sessionManager.GetString(r.Context(), sessionKeyAccessToken)
+	return server.sessionManager.GetString(r.Context(), SessionKeyAccessToken)
 }
 
 func (server *SqyrrlServer) setSessionAccessToken(ctx context.Context, token string) {
-	server.sessionManager.Put(ctx, sessionKeyAccessToken, token)
+	server.sessionManager.Put(ctx, SessionKeyAccessToken, token)
 }
 
 func (server *SqyrrlServer) getSessionUserEmail(r *http.Request) string {
-	return server.sessionManager.GetString(r.Context(), sessionKeyUserEmail)
+	return server.sessionManager.GetString(r.Context(), SessionKeyUserEmail)
 }
 
 func (server *SqyrrlServer) setSessionUserEmail(ctx context.Context, email string) {
-	server.sessionManager.Put(ctx, sessionKeyUserEmail, email)
+	server.sessionManager.Put(ctx, SessionKeyUserEmail, email)
 }
 
 func (server *SqyrrlServer) getSessionUserName(r *http.Request) string {
-	return server.sessionManager.GetString(r.Context(), sessionKeyUserName)
+	return server.sessionManager.GetString(r.Context(), SessionKeyUserName)
 }
 
 func (server *SqyrrlServer) setSessionUserName(ctx context.Context, name string) {
-	server.sessionManager.Put(ctx, sessionKeyUserName, name)
+	server.sessionManager.Put(ctx, SessionKeyUserName, name)
 }
 
 func (server *SqyrrlServer) waitAndShutdown() (err error) { // NRV
@@ -604,11 +597,11 @@ func getEnv(envVar string) (string, error) {
 	return val, nil
 }
 
-// iRODSUserIDFromEmail extracts an iRODS user ID from an email address. This assumes
+// iRODSUsernameFromEmail extracts an iRODS username from an email address. This assumes
 // that the email address is in the form "username@domain", which is the case for
 // Sanger users authenticated via OpenID Connect. If the email address cannot be parsed,
 // an empty string is returned.
-func iRODSUserIDFromEmail(logger zerolog.Logger, email string) string {
+func iRODSUsernameFromEmail(logger zerolog.Logger, email string) string {
 	address, err := mail.ParseAddress(email)
 	if err != nil {
 		logger.Err(err).Msg("Failed to parse user email address")

@@ -6,10 +6,26 @@
 Sqyrrl is an HTTP server which contains an embedded iRODS client and is able to
 serve data directly from iRODS.
 
+## Building
+
+In the root directory of the repository run `make` to build Linux, macOS and Windows
+executables for the architecture of the machine you are on.
+
+To build for a different architecture, pass a Go architecture argument to make e.g.
+
+```
+make GOARCH=amd64  # To build for amd64
+
+make GOARCH=arm # To build for arm
+```
+
+You can find all the valid operating system and architecture pairs supported on your
+system by running `go tool dist list`
+
 ## Installation
 
-Sqyrrl is a available as and `amd64` binary for Linux, macOS and Windows,
-or as a Docker image. Copy the file to the desired location and run it.
+Sqyrrl runs on Linux, macOS and Windows. Copy the executable file to the desired location
+and run it. It is also available as a Docker image.
 
 ## Running Sqyrrl
 
