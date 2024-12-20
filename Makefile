@@ -2,10 +2,11 @@ VERSION := $(shell git describe --always --tags --dirty)
 ldflags := "-X sqyrrl/server.Version=${VERSION}"
 build_args := -a -v -ldflags ${ldflags}
 
-build_path = "build/sqyrrl-${VERSION}"
+build_path = build/sqyrrl-${VERSION}
+
+export GOARCH := $(shell go env GOARCH)
 
 CGO_ENABLED := 1
-GOARCH := amd64
 
 .PHONY: build build-linux build-darwin build-windows check clean coverage install lint test
 
@@ -13,17 +14,20 @@ all: build
 
 build: build-linux build-darwin build-windows
 
+build-linux: export GOOS = linux
 build-linux:
 	mkdir -p ${build_path}
-	GOARCH=${GOARCH} GOOS=linux go build ${build_args} -o ${build_path}/sqyrrl-linux-${GOARCH} ./main.go
+	go build ${build_args} -o ${build_path}/sqyrrl-${GOOS}-${GOARCH} ./main.go
 
+build-darwin: export GOOS = darwin
 build-darwin:
 	mkdir -p ${build_path}
-	GOARCH=${GOARCH} GOOS=darwin go build ${build_args} -o ${build_path}/sqyrrl-darwin-${GOARCH} ./main.go
+	go build ${build_args} -o ${build_path}/sqyrrl-${GOOS}-${GOARCH} ./main.go
 
+build-windows: export GOOS = windows
 build-windows:
 	mkdir -p ${build_path}
-	GOARCH=${GOARCH} GOOS=windows go build ${build_args} -o ${build_path}/sqyrrl-windows-${GOARCH}.exe ./main.go
+	go build ${build_args} -o ${build_path}/sqyrrl-${GOOS}-${GOARCH}.exe ./main.go
 
 install:
 	go install ${build_args}

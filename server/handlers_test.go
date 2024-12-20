@@ -18,7 +18,7 @@
 package server_test
 
 import (
-	"fmt"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/cyverse/go-irodsclient/irods/connection"
-	"github.com/cyverse/go-irodsclient/irods/fs"
+	ifs "github.com/cyverse/go-irodsclient/irods/fs"
 	"github.com/cyverse/go-irodsclient/irods/types"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -37,52 +37,30 @@ import (
 )
 
 var _ = Describe("iRODS Get Handler", func() {
-	var testZone, rootColl, workColl string
+	var specTimeout = time.Second * 5
+	var workColl string
 	var testFile, localPath, remotePath string
-
-	var testConfig server.Config
-	var testServer *server.SqyrrlServer
 
 	BeforeEach(func(ctx SpecContext) {
 		// Put a test file into iRODS
-		testZone = "testZone"
-		rootColl = fmt.Sprintf("/%s/home/irods", testZone)
 		workColl = TmpRodsPath(rootColl, "iRODSGetHandler")
-
-		testConfig = server.Config{
-			Host:          "localhost",
-			Port:          "9999",
-			EnableOIDC:    false,
-			CertFilePath:  "./testdata/config/localhost.crt",
-			KeyFilePath:   "./testdata/config/localhost.key",
-			IndexInterval: time.Hour * 1,
-		}
-
-		var err error
-		err = server.Configure(suiteLogger, &testConfig)
-		Expect(err).NotTo(HaveOccurred())
-
-		testServer, err = server.NewSqyrrlServer(suiteLogger, &testConfig)
-		Expect(err).NotTo(HaveOccurred())
-
-		err = testServer.StartBackground()
-		Expect(err).NotTo(HaveOccurred())
-
-		err = irodsFS.MakeDir(workColl, true)
+		err := irodsFS.MakeDir(workColl, true)
 		Expect(err).NotTo(HaveOccurred())
 
 		testFile = "test.txt"
 		localPath = filepath.Join("testdata", testFile)
 		remotePath = path.Join(workColl, testFile)
 
-		err = irodsFS.UploadFile(localPath, remotePath, "", false, nil)
+		_, err = irodsFS.UploadFile(localPath, remotePath, "", false, true, true, nil)
 		Expect(err).NotTo(HaveOccurred())
 	}, NodeTimeout(time.Second*5))
 
 	AfterEach(func() {
-		testServer.Stop()
 		// Remove the test file from iRODS
-		err := irodsFS.RemoveDir(workColl, true, true)
+		err := irodsFS.RemoveFile(remotePath, true)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = irodsFS.RemoveDir(workColl, true, true)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -92,7 +70,7 @@ var _ = Describe("iRODS Get Handler", func() {
 		var err error
 
 		BeforeEach(func(ctx SpecContext) {
-			handler, err = testServer.GetHandler(server.EndpointIRODS)
+			handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 			Expect(err).NotTo(HaveOccurred())
 
 			objPath := path.Join(workColl, "no", "such", "file.txt")
@@ -108,91 +86,240 @@ var _ = Describe("iRODS Get Handler", func() {
 			handler.ServeHTTP(rec, r)
 
 			Expect(rec.Code).To(Equal(http.StatusNotFound))
-		}, SpecTimeout(time.Second*2))
+		}, SpecTimeout(specTimeout))
 	})
 
 	When("a valid data object path is given", func() {
-		var r *http.Request
-		var handler http.Handler
-		var err error
+		When("the Sqyrrl user is not authenticated", func() {
+			When("a valid data object path is given", func() {
+				var r *http.Request
+				var handler http.Handler
+				var err error
 
-		BeforeEach(func(ctx SpecContext) {
-			handler, err = testServer.GetHandler(server.EndpointIRODS)
-			Expect(err).NotTo(HaveOccurred())
+				BeforeEach(func(ctx SpecContext) {
+					handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
+					Expect(err).NotTo(HaveOccurred())
 
-			objPath := path.Join(workColl, testFile)
-			getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
-			Expect(err).NotTo(HaveOccurred())
+					objPath := path.Join(workColl, testFile)
+					getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
+					Expect(err).NotTo(HaveOccurred())
 
-			r, err = http.NewRequest("GET", getURL, nil)
-			Expect(err).NotTo(HaveOccurred())
-		}, NodeTimeout(time.Second*2))
+					r, err = http.NewRequest("GET", getURL, nil)
+					Expect(err).NotTo(HaveOccurred())
+				}, NodeTimeout(time.Second*2))
 
-		When("the data object does not have public read permissions", func() {
-			It("should return Forbidden", func(ctx SpecContext) {
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, r)
+				When("the data object does not have read permissions for the public group", func() {
+					It("should return Forbidden", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
 
-				Expect(rec.Code).To(Equal(http.StatusForbidden))
-			}, SpecTimeout(time.Second*2))
+						Expect(rec.Code).To(Equal(http.StatusForbidden))
+					}, SpecTimeout(specTimeout))
+				})
+
+				When("the data object has read permissions for the public group", func() {
+					var conn *connection.IRODSConnection
+
+					BeforeEach(func(ctx SpecContext) {
+						handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
+						Expect(err).NotTo(HaveOccurred())
+
+						conn, err = irodsFS.GetIOConnection()
+						Expect(err).NotTo(HaveOccurred())
+
+						err = ifs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
+							server.IRODSPublicGroup, testZone, false)
+						Expect(err).NotTo(HaveOccurred())
+					}, NodeTimeout(time.Second*5))
+
+					AfterEach(func() {
+						err := irodsFS.ReturnIOConnection(conn)
+						Expect(err).NotTo(HaveOccurred())
+					})
+
+					It("should return OK", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusOK))
+					}, SpecTimeout(specTimeout))
+
+					It("should serve the correct body content", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusOK))
+						Expect(rec.Body.String()).To(Equal("test\n"))
+					}, SpecTimeout(specTimeout))
+				})
+			})
 		})
 
-		When("the data object has public read permissions", func() {
-			var conn *connection.IRODSConnection
-			var acl []*types.IRODSAccess
+		When("the Sqyrrl user is authenticated", func() {
+			var r *http.Request
+			var handler http.Handler
+			var err error
+
+			var accessToken = "test_access_token"
+			var sessionToken = "test_session_token"
 
 			BeforeEach(func(ctx SpecContext) {
-				handler, err = testServer.GetHandler(server.EndpointIRODS)
+				handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 				Expect(err).NotTo(HaveOccurred())
 
-				conn, err = irodsFS.GetIOConnection()
+				objPath := path.Join(workColl, testFile)
+				getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
 				Expect(err).NotTo(HaveOccurred())
 
-				err = fs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
-					server.IRODSPublicUser, testZone, false)
-				Expect(err).NotTo(HaveOccurred())
-
-				acl, err = irodsFS.ListFileACLsWithGroupUsers(remotePath)
-				Expect(err).NotTo(HaveOccurred())
-
-				var publicAccess bool
-				for _, ac := range acl {
-					suiteLogger.Info().
-						Str("user", ac.UserName).
-						Str("expected_user", server.IRODSPublicUser).
-						Str("zone", ac.UserZone).
-						Str("expected_zone", testZone).
-						Str("access", ac.AccessLevel.ChmodString()).
-						Str("expected_access", types.IRODSAccessLevelReadObject.ChmodString()).
-						Msg("ACL")
-
-					if ac.UserName == server.IRODSPublicUser &&
-						ac.UserZone == testZone &&
-						ac.AccessLevel == types.IRODSAccessLevelReadObject {
-						publicAccess = true
-					}
-				}
-				Expect(publicAccess).To(BeTrue())
-			}, NodeTimeout(time.Second*5))
-
-			AfterEach(func() {
-				irodsFS.ReturnIOConnection(conn)
+				r, err = http.NewRequest("GET", getURL, nil)
 			})
 
-			It("should return OK", func(ctx SpecContext) {
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, r)
+			When("the user is not in the public group", func() {
+				BeforeEach(func(ctx SpecContext) {
+					// Populate a session as if the user has authenticated through OIDC
 
-				Expect(rec.Code).To(Equal(http.StatusOK))
-			}, SpecTimeout(time.Second*2))
+					var c context.Context
+					// There is no session for this token, so a new session will always be created
+					c, err = sessManager.Load(r.Context(), sessionToken)
+					sessManager.Put(c, server.SessionKeyAccessToken, accessToken)
+					sessManager.Put(c, server.SessionKeyUserName, userNotInPublic)
+					sessManager.Put(c, server.SessionKeyUserEmail, userNotInPublic+"@sanger.ac.uk")
+					r = r.WithContext(c)
 
-			It("should serve the correct body content", func(ctx SpecContext) {
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, r)
+					// A real session token is created here, but we don't need it
+					_, _, err = sessManager.Commit(r.Context())
+					Expect(err).NotTo(HaveOccurred())
+				}, NodeTimeout(time.Second*2))
 
-				Expect(rec.Code).To(Equal(http.StatusOK))
-				Expect(rec.Body.String()).To(Equal("test\n"))
-			}, SpecTimeout(time.Second*2))
+				When("the data object does not have read permissions for the public group", func() {
+					It("should return Forbidden", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusForbidden))
+					}, SpecTimeout(specTimeout))
+
+					When("the data object has read permissions for another of the user's groups", func() {
+						var conn *connection.IRODSConnection
+
+						BeforeEach(func(ctx SpecContext) {
+							handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
+							Expect(err).NotTo(HaveOccurred())
+
+							conn, err = irodsFS.GetIOConnection()
+							Expect(err).NotTo(HaveOccurred())
+
+							err = ifs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
+								populatedGroup, testZone, false)
+							Expect(err).NotTo(HaveOccurred())
+						}, NodeTimeout(time.Second*5))
+
+						AfterEach(func() {
+							err := irodsFS.ReturnIOConnection(conn)
+							Expect(err).NotTo(HaveOccurred())
+						})
+
+						It("should return OK", func(ctx SpecContext) {
+							rec := httptest.NewRecorder()
+							handler.ServeHTTP(rec, r)
+
+							Expect(rec.Code).To(Equal(http.StatusOK))
+						}, SpecTimeout(specTimeout))
+					})
+				})
+
+				When("the data object has read permissions for the public group", func() {
+					var conn *connection.IRODSConnection
+
+					BeforeEach(func(ctx SpecContext) {
+						handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
+						Expect(err).NotTo(HaveOccurred())
+
+						conn, err = irodsFS.GetIOConnection()
+						Expect(err).NotTo(HaveOccurred())
+
+						err = ifs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
+							server.IRODSPublicGroup, testZone, false)
+						Expect(err).NotTo(HaveOccurred())
+					}, NodeTimeout(time.Second*5))
+
+					AfterEach(func() {
+						err := irodsFS.ReturnIOConnection(conn)
+						Expect(err).NotTo(HaveOccurred())
+					})
+
+					It("should return Forbidden", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusForbidden))
+					}, SpecTimeout(specTimeout))
+				})
+			})
+
+			When("the user is in the public group", func() {
+				BeforeEach(func(ctx SpecContext) {
+					// Populate a session as if the user has authenticated through OIDC
+
+					var c context.Context
+					// There is no session for this token, so a new session will always be created
+					c, err = sessManager.Load(r.Context(), sessionToken)
+					sessManager.Put(c, server.SessionKeyAccessToken, accessToken)
+					sessManager.Put(c, server.SessionKeyUserName, userInPublic)
+					sessManager.Put(c, server.SessionKeyUserEmail, userInPublic+"@sanger.ac.uk")
+					r = r.WithContext(c)
+
+					// A real session token is created here, but we don't need it
+					_, _, err = sessManager.Commit(r.Context())
+					Expect(err).NotTo(HaveOccurred())
+				}, NodeTimeout(time.Second*2))
+
+				When("the data object does not have read permissions for the public group", func() {
+					It("should return Forbidden", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusForbidden))
+					}, SpecTimeout(specTimeout))
+				})
+
+				When("the data object has read permissions for the public group", func() {
+					var conn *connection.IRODSConnection
+
+					BeforeEach(func(ctx SpecContext) {
+						handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
+						Expect(err).NotTo(HaveOccurred())
+
+						conn, err = irodsFS.GetIOConnection()
+						Expect(err).NotTo(HaveOccurred())
+
+						err = ifs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
+							server.IRODSPublicGroup, testZone, false)
+						Expect(err).NotTo(HaveOccurred())
+					}, NodeTimeout(time.Second*5))
+
+					AfterEach(func() {
+						err := irodsFS.ReturnIOConnection(conn)
+						Expect(err).NotTo(HaveOccurred())
+					})
+
+					It("should return OK", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusOK))
+					}, SpecTimeout(specTimeout))
+
+					It("should serve the correct body content", func(ctx SpecContext) {
+						rec := httptest.NewRecorder()
+						handler.ServeHTTP(rec, r)
+
+						Expect(rec.Code).To(Equal(http.StatusOK))
+						Expect(rec.Body.String()).To(Equal("test\n"))
+					}, SpecTimeout(specTimeout))
+
+				})
+			})
 		})
 	})
 })
