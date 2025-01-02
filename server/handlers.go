@@ -338,15 +338,20 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 			return
 		}
 
-		userZone := server.iRODSAccount.ClientZone
+		localZone := server.iRODSAccount.ClientZone
 
 		var isReadable bool
 
 		if server.isAuthenticated(r) {
+			// The username obtained from the email address does not include the iRODS
+			// zone. We use the local zone to which the  Sqyrrl server is connected as
+			// the user's zone.
 			userName := iRODSUsernameFromEmail(logger, server.getSessionUserEmail(r))
+			userZone := localZone
+
 			logger.Debug().Str("user", userName).Msg("User is authenticated")
 
-			isReadable, err = IsReadableByUser(logger, rodsFs, userName, userZone, objPath)
+			isReadable, err = IsReadableByUser(logger, rodsFs, localZone, userName, userZone, objPath)
 			if err != nil {
 				logger.Err(err).Msg("Failed to check if the object is readable")
 				writeErrorResponse(logger, w, http.StatusInternalServerError)
@@ -364,7 +369,7 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 			}
 		} else {
 			logger.Debug().Msg("User is not authenticated")
-			isReadable, err = IsPublicReadable(logger, rodsFs, userZone, objPath)
+			isReadable, err = IsPublicReadable(logger, rodsFs, localZone, objPath)
 			if err != nil {
 				logger.Err(err).Msg("Failed to check if the object is public readable")
 				writeErrorResponse(logger, w, http.StatusInternalServerError)

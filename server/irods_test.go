@@ -34,13 +34,15 @@ import (
 
 var _ = Describe("iRODS functions", func() {
 	var conn *connection.IRODSConnection
-	var zone string
+	var localZone, userZone string
 	var workColl string
 	var testFile, localPath, remotePath string
 	var err error
 
 	BeforeEach(func(ctx SpecContext) {
-		zone = "testZone"
+		localZone = "testZone"
+		userZone = localZone
+
 		workColl = TmpRodsPath(rootColl, "iRODSGetHandler")
 		err = irodsFS.MakeDir(workColl, true)
 		Expect(err).NotTo(HaveOccurred())
@@ -67,8 +69,8 @@ var _ = Describe("iRODS functions", func() {
 
 	When("a non-existent path is given", func() {
 		It("should return a FileNotFoundError", func() {
-			_, err := server.IsReadableByUser(suiteLogger, irodsFS, userInPublic,
-				zone, "/no/such/path")
+			_, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+				userInPublic, userZone, "/no/such/path")
 			Expect(err).To(HaveOccurred())
 			Expect(err).To(MatchError(&types.FileNotFoundError{}))
 		})
@@ -76,8 +78,8 @@ var _ = Describe("iRODS functions", func() {
 
 	When("a non-existent user is given", func() {
 		It("should return false", func() {
-			readable, err := server.IsReadableByUser(suiteLogger, irodsFS, "no_such_user",
-				zone, remotePath)
+			readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+				"no_such_user", userZone, remotePath)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(readable).To(BeFalse())
 		})
@@ -108,21 +110,31 @@ var _ = Describe("iRODS functions", func() {
 
 			When("the user is in the public group", func() {
 				It("should return false", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeFalse())
+				})
+
+				When("the user is in a different zone", func() {
+					It("should return false", func() {
+						readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+							userInPublic, "anotherZone", remotePath)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(readable).To(BeFalse())
+					})
 				})
 			})
 
 			When("the user is not in the public group", func() {
 				It("should return false", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userNotInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userNotInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeFalse())
 				})
 			})
+
 		})
 
 		When("the data object has read permissions for the public group", func() {
@@ -134,21 +146,31 @@ var _ = Describe("iRODS functions", func() {
 
 			When("the user is in the public group", func() {
 				It("should return true", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeTrue())
+				})
+
+				When("the user is in a different zone", func() {
+					It("should return false", func() {
+						readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+							userInPublic, "anotherZone", remotePath)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(readable).To(BeFalse())
+					})
 				})
 			})
 
 			When("the user is not in the public group", func() {
 				It("should return false", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userNotInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userNotInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeFalse())
 				})
 			})
+
 		})
 
 		When("the data object has own permissions for the public group", func() {
@@ -160,21 +182,31 @@ var _ = Describe("iRODS functions", func() {
 
 			When("the user is in the public group", func() {
 				It("should return true", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeTrue())
+				})
+
+				When("the user is in a different zone", func() {
+					It("should return false", func() {
+						readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+							userInPublic, "anotherZone", remotePath)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(readable).To(BeFalse())
+					})
 				})
 			})
 
 			When("the user is not in the public group", func() {
 				It("should return false", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userNotInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userNotInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeFalse())
 				})
 			})
+
 		})
 
 		When("the data object has read permissions for several groups", func() {
@@ -188,17 +220,26 @@ var _ = Describe("iRODS functions", func() {
 
 			When("the user is in one of the groups", func() {
 				It("should return true", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userInOthers,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userInOthers, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeTrue())
+				})
+
+				When("the user is in a different zone", func() {
+					It("should return false", func() {
+						readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+							userInOthers, "anotherZone", remotePath)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(readable).To(BeFalse())
+					})
 				})
 			})
 
 			When("the user is not in one of the groups", func() {
 				It("should return false", func() {
-					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, userNotInPublic,
-						zone, remotePath)
+					readable, err := server.IsReadableByUser(suiteLogger, irodsFS, localZone,
+						userNotInPublic, userZone, remotePath)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(readable).To(BeFalse())
 				})

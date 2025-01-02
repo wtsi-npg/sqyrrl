@@ -190,17 +190,20 @@ func NewIRODSAccount(logger zerolog.Logger, manager *config.ICommandsEnvironment
 }
 
 // IsReadableByUser checks if the data object at the given path is readable by the
-// given user in the zone hosting the file.
+// given user in the zone the Sqyrrl server is logged into.
 //
 // If iRODS is federated, there may be multiple zones, each with their own users.
-// The zone argument is the zone of user whose read permission is to be checked,
-// which is normally the current zone. This is consulted only if the ACL user zone is
-// empty.
+//
+// The localZone argument is the zone that Sqyrrl is logged into. This is consulted
+// only if an access permission in the data object's ACL has an empty user zone, in which
+// case the local zone is assumed.
+//
+// The userZone argument is the zone of the user whose read permission is to be checked.
 //
 // A file is considered readable if the user has read access or is in a group that has
 // read access.
 func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
-	userName string, userZone string, rodsPath string) (_ bool, err error) {
+	localZone string, userName string, userZone string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
 
 	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
@@ -231,11 +234,11 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 	for _, ac := range acl {
 		// ACL user zone may be empty if it refers to the local zone
-		var effectiveUserZone string
+		var acUserZone string
 		if ac.UserZone != "" {
-			effectiveUserZone = ac.UserZone
+			acUserZone = ac.UserZone
 		} else {
-			effectiveUserZone = userZone
+			acUserZone = localZone
 		}
 
 		hasRead := ac.AccessLevel == types.IRODSAccessLevelReadObject
@@ -243,13 +246,13 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 		// There is permission directly for the user
 		if ac.UserType == types.IRODSUserRodsUser || ac.UserType == types.IRODSUserRodsAdmin {
-			if effectiveUserZone == userZone && ac.UserName == userName && (hasRead || hasOwn) {
+			if acUserZone == userZone && ac.UserName == userName && (hasRead || hasOwn) {
 				logger.Trace().
 					Str("path", rodsPath).
 					Str("user", userName).
 					Str("zone", userZone).
-					Str("effective_zone", effectiveUserZone).
 					Str("ac_user", ac.UserName).
+					Str("ac_zone", acUserZone).
 					Str("ac_level", string(ac.AccessLevel)).
 					Bool("read", hasRead).
 					Bool("own", hasOwn).
@@ -263,7 +266,7 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 				Str("user", userName).
 				Str("zone", userZone).
 				Str("ac_user", ac.UserName).
-				Str("effective_zone", effectiveUserZone).
+				Str("ac_zone", acUserZone).
 				Str("ac_level", string(ac.AccessLevel)).
 				Bool("read", hasRead).
 				Bool("own", hasOwn).
@@ -275,13 +278,13 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			// Check if user in the group of this AC (ac.UserName is the name of the AC's group, unfortunately)
 			_, userInGroup := userGroupLookup[ac.UserName]
 
-			if effectiveUserZone == userZone && userInGroup && (hasRead || hasOwn) {
+			if acUserZone == userZone && userInGroup && (hasRead || hasOwn) {
 				logger.Trace().
 					Str("path", rodsPath).
 					Str("user", userName).
 					Str("zone", userZone).
-					Str("effective_zone", effectiveUserZone).
 					Str("ac_user", ac.UserName).
+					Str("ac_zone", acUserZone).
 					Str("ac_level", string(ac.AccessLevel)).
 					Bool("read", hasRead).
 					Bool("own", hasOwn).
