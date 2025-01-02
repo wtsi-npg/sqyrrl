@@ -205,6 +205,21 @@ func NewIRODSAccount(logger zerolog.Logger, manager *config.ICommandsEnvironment
 func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 	localZone string, userName string, userZone string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
+	var users []*types.IRODSUser
+
+	localUserExists := false
+	if users, err = filesystem.ListUsers(); err != nil {
+		return false, err
+	}
+	for _, user := range users {
+		if user.Name == userName && user.Zone == userZone {
+			localUserExists = true
+			break
+		}
+	}
+	if !localUserExists {
+		return false, nil
+	}
 
 	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
 		return false, err
