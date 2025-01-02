@@ -8,7 +8,7 @@ export GOARCH := $(shell go env GOARCH)
 
 CGO_ENABLED := 1
 
-.PHONY: build build-linux build-darwin build-windows check clean coverage install lint test
+.PHONY: build build-linux build-darwin build-windows check clean coverage install lint test-install test
 
 all: build
 
@@ -37,10 +37,13 @@ lint:
 
 check: test
 
-test:
+test-install:
+	go install github.com/onsi/ginkgo/v2/ginkgo
+
+test: test-install
 	ginkgo -r --race
 
-coverage:
+coverage: test-install
 	ginkgo -r --cover -coverprofile=coverage.out
 
 dist: build

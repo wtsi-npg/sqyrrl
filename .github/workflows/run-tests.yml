@@ -54,11 +54,6 @@ jobs:
         go-version-file: "go.mod"
         cache: true
 
-    - name: "Install test runner"
-      run: |
-        go install -mod=mod github.com/onsi/ginkgo/v2/ginkgo
-        go get github.com/onsi/gomega/...
-
     - name: "Configure iRODS clients"
       run: |
         mkdir -p "$HOME/.irods"
