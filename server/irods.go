@@ -29,7 +29,6 @@ import (
 	"github.com/cyverse/go-irodsclient/config"
 	ifs "github.com/cyverse/go-irodsclient/fs"
 	"github.com/cyverse/go-irodsclient/irods/types"
-	"github.com/cyverse/go-irodsclient/irods/util"
 	"github.com/rs/zerolog"
 )
 
@@ -203,12 +202,8 @@ func NewIRODSAccount(logger zerolog.Logger, manager *config.ICommandsEnvironment
 func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 	userName string, userZone string, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
-	var pathZone string
 
 	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
-		return false, err
-	}
-	if pathZone, err = util.GetIRODSZone(rodsPath); err != nil {
 		return false, err
 	}
 
@@ -248,7 +243,7 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 		// There is permission directly for the user
 		if ac.UserType == types.IRODSUserRodsUser || ac.UserType == types.IRODSUserRodsAdmin {
-			if effectiveUserZone == pathZone && ac.UserName == userName && (hasRead || hasOwn) {
+			if effectiveUserZone == userZone && ac.UserName == userName && (hasRead || hasOwn) {
 				logger.Trace().
 					Str("path", rodsPath).
 					Str("user", userName).
@@ -269,7 +264,6 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 				Str("zone", userZone).
 				Str("ac_user", ac.UserName).
 				Str("effective_zone", effectiveUserZone).
-				Str("path_zone", pathZone).
 				Str("ac_level", string(ac.AccessLevel)).
 				Bool("read", hasRead).
 				Bool("own", hasOwn).
@@ -281,7 +275,7 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			// Check if user in the group of this AC (ac.UserName is the name of the AC's group, unfortunately)
 			_, userInGroup := userGroupLookup[ac.UserName]
 
-			if effectiveUserZone == pathZone && userInGroup && (hasRead || hasOwn) {
+			if effectiveUserZone == userZone && userInGroup && (hasRead || hasOwn) {
 				logger.Trace().
 					Str("path", rodsPath).
 					Str("user", userName).
