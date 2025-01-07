@@ -18,6 +18,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -141,6 +142,14 @@ func NewIRODSAccount(logger zerolog.Logger, manager *config.ICommandsEnvironment
 		return nil, err
 	}
 
+	var tlsConfig *tls.Config
+	if tlsConfig, err = account.SSLConfiguration.GetTLSConfig(account.Host); err != nil {
+		logger.Err(err).Msg("Failed to update TLS configuration")
+		return nil, err
+	}
+	// Add a cipher suite that is compatible with older iRODS servers (4.2.7)
+	tlsConfig.CipherSuites = append(tlsConfig.CipherSuites, tls.TLS_RSA_WITH_AES_256_CBC_SHA)
+
 	if password != "" {
 		if err = InitIRODS(logger, manager, password); err != nil {
 			logger.Err(err).
@@ -218,6 +227,11 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		}
 	}
 	if !localUserExists {
+		logger.Warn().
+			Str("path", rodsPath).
+			Str("user", userName).
+			Str("zone", userZone).
+			Msg("iRODS user not found")
 		return false, nil
 	}
 
