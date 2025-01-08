@@ -18,6 +18,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -241,9 +242,10 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 	logger.Trace().
 		Str("path", rodsPath).
+		Int("num_acls_for_path", len(acl)).
 		Str("user", userName).
 		Str("zone", userZone).
-		Int("num_groups", len(userGroups)).
+		Int("num_groups_for_user", len(userGroups)).
 		Str("groups", fmt.Sprintf("[%v]", strings.Join(groupNames, ", "))).
 		Msg("Checking read access")
 
@@ -259,8 +261,9 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		hasRead := ac.AccessLevel == types.IRODSAccessLevelReadObject
 		hasOwn := ac.AccessLevel == types.IRODSAccessLevelOwner
 
+		switch ac.UserType {
 		// There is permission directly for the user
-		if ac.UserType == types.IRODSUserRodsUser || ac.UserType == types.IRODSUserRodsAdmin {
+		case types.IRODSUserRodsUser, types.IRODSUserRodsAdmin, types.IRODSUserGroupAdmin:
 			if acUserZone == userZone && ac.UserName == userName && (hasRead || hasOwn) {
 				logger.Trace().
 					Str("path", rodsPath).
@@ -286,10 +289,9 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 				Bool("read", hasRead).
 				Bool("own", hasOwn).
 				Msg("User read access not found")
-		}
 
 		// There is permission for a group the user is in
-		if ac.UserType == types.IRODSUserRodsGroup {
+		case types.IRODSUserRodsGroup:
 			// Check if user in the group of this AC (ac.UserName is the name of the AC's group, unfortunately)
 			_, userInGroup := userGroupLookup[ac.UserName]
 
@@ -308,6 +310,33 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 				return true, nil
 			}
+
+			logger.Trace().
+				Str("path", rodsPath).
+				Str("user", userName).
+				Str("zone", userZone).
+				Str("ac_user", ac.UserName).
+				Str("ac_zone", acUserZone).
+				Str("ac_level", string(ac.AccessLevel)).
+				Bool("read", hasRead).
+				Bool("own", hasOwn).
+				Bool("user_in_group", userInGroup).
+				Msg("Group access not found")
+
+		default:
+			logger.Error().
+				Str("path", rodsPath).
+				Str("user", userName).
+				Str("zone", userZone).
+				Str("ac_type", string(ac.UserType)).
+				Str("ac_user", ac.UserName).
+				Str("ac_zone", acUserZone).
+				Str("ac_level", string(ac.AccessLevel)).
+				Bool("read", hasRead).
+				Bool("own", hasOwn).
+				Msg("acl user type not accounted for")
+
+			return false, errors.New("acl user type not accounted for")
 		}
 	}
 
