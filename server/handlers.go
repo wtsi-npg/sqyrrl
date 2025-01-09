@@ -347,7 +347,7 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 			// zone. We use the local zone to which the  Sqyrrl server is connected as
 			// the user's zone.
 			userName := iRODSUsernameFromEmail(logger, server.getSessionUserEmail(r))
-			userZone := localZone
+			userZone := server.sqyrrlConfig.IRODSZoneForOIDC
 
 			logger.Debug().Str("user", userName).Msg("User is authenticated")
 
