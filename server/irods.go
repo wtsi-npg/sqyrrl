@@ -301,13 +301,17 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			// Check if user in the group of this AC (ac.UserName is the name of the AC's group, unfortunately)
 			_, userInGroup := userGroupLookup[ac.UserName]
 
-			if acUserZone == userZone && userInGroup && (hasRead || hasOwn) {
+			// note a "acUserZone == userZone" check would be wrong here as:
+			// - acUserZone is for the group whilst userZone is for the user (in the group)
+			// - groups (assumed to be) only for the zone being served - no federation of groups
+			// - equivalent zone check is done in the group membership logic
+			if acUserZone == localZone && userInGroup && (hasRead || hasOwn) {
 				logger.Trace().
 					Str("path", rodsPath).
 					Str("user", userName).
 					Str("zone", userZone).
-					Str("ac_user", ac.UserName).
-					Str("ac_zone", acUserZone).
+					Str("ac_user(group)", ac.UserName).
+					Str("ac_zone(group)", acUserZone).
 					Str("ac_level", string(ac.AccessLevel)).
 					Bool("read", hasRead).
 					Bool("own", hasOwn).
@@ -321,8 +325,8 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 				Str("path", rodsPath).
 				Str("user", userName).
 				Str("zone", userZone).
-				Str("ac_user", ac.UserName).
-				Str("ac_zone", acUserZone).
+				Str("ac_user(group)", ac.UserName).
+				Str("ac(group)", acUserZone).
 				Str("ac_level", string(ac.AccessLevel)).
 				Bool("read", hasRead).
 				Bool("own", hasOwn).
