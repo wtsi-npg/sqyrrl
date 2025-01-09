@@ -219,6 +219,12 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		}
 	}
 	if !localUserExists {
+		logger.Trace().
+			Str("path", rodsPath).
+			Str("user", userName).
+			Str("zone", userZone).
+			Bool("localUserExists", localUserExists).
+			Msg("No local iRODS user")
 		return false, nil
 	}
 
