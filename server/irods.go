@@ -233,6 +233,12 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 	}
 
 	var userGroups []*types.IRODSUser
+	// WARNING: go-irodsclient is currently zone/federation unaware.
+	// The iRODS zone used together with OIDC user ids, and which is used for checking
+	// user based ACLs, cannot be used when checking (the membership of) groups used for
+	// iRODS ACLs. i.e. we would ideally be calling something like
+	//   userGroups, err = filesystem.ListUserGroups(userName, userZone)
+	// instead of the following:
 	userGroups, err = filesystem.ListUserGroups(userName)
 	if err != nil {
 		return false, err
