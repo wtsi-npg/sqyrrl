@@ -311,33 +311,47 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			// - acUserZone is for the group whilst userZone is for the user (in the group)
 			// - groups (assumed to be) only for the zone being served - no federation of groups
 			// - equivalent zone check is done in the group membership logic
-			if acUserZone == localZone && userInGroup && (hasRead || hasOwn) {
+			if acUserZone == localZone {
+				if userInGroup && (hasRead || hasOwn) {
+					logger.Trace().
+						Str("path", rodsPath).
+						Str("user", userName).
+						Str("zone", userZone).
+						Str("ac_user(group)", ac.UserName).
+						Str("ac_zone(group)", acUserZone).
+						Str("ac_level", string(ac.AccessLevel)).
+						Bool("read", hasRead).
+						Bool("own", hasOwn).
+						Bool("user_in_group", userInGroup).
+						Msg("Group access found")
+
+					return true, nil
+				}
+
 				logger.Trace().
 					Str("path", rodsPath).
 					Str("user", userName).
 					Str("zone", userZone).
 					Str("ac_user(group)", ac.UserName).
-					Str("ac_zone(group)", acUserZone).
+					Str("ac(group)", acUserZone).
 					Str("ac_level", string(ac.AccessLevel)).
 					Bool("read", hasRead).
 					Bool("own", hasOwn).
 					Bool("user_in_group", userInGroup).
-					Msg("Group access found")
-
-				return true, nil
+					Msg("Group access not found")
+			} else {
+				logger.Warn().
+					Str("path", rodsPath).
+					Str("user", userName).
+					Str("zone", userZone).
+					Str("ac_user(group)", ac.UserName).
+					Str("ac(group)", acUserZone).
+					Str("ac_level", string(ac.AccessLevel)).
+					Bool("read", hasRead).
+					Bool("own", hasOwn).
+					Bool("user_in_group", userInGroup).
+					Msg("Developer assumption of groups only being available for local zone broken")
 			}
-
-			logger.Trace().
-				Str("path", rodsPath).
-				Str("user", userName).
-				Str("zone", userZone).
-				Str("ac_user(group)", ac.UserName).
-				Str("ac(group)", acUserZone).
-				Str("ac_level", string(ac.AccessLevel)).
-				Bool("read", hasRead).
-				Bool("own", hasOwn).
-				Bool("user_in_group", userInGroup).
-				Msg("Group access not found")
 
 		default:
 			logger.Error().
