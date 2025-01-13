@@ -369,7 +369,7 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 			}
 		} else {
 			logger.Debug().Msg("User is not authenticated")
-			isReadable, err = IsPublicReadable(logger, rodsFs, localZone, objPath)
+			isReadable, err = IsPublicReadable(logger, rodsFs, objPath)
 			if err != nil {
 				logger.Err(err).Msg("Failed to check if the object is public readable")
 				writeErrorResponse(logger, w, http.StatusInternalServerError)
