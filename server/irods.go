@@ -383,7 +383,7 @@ func UserInGroup(logger zerolog.Logger, filesystem *ifs.FileSystem,
 }
 
 func IsPublicReadable(logger zerolog.Logger, filesystem *ifs.FileSystem,
-	userZone string, rodsPath string) (_ bool, err error) {
+	rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
 	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
 		return false, err
@@ -391,7 +391,7 @@ func IsPublicReadable(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 	for _, ac := range acl {
 		if ac.UserName == IRODSPublicGroup &&
-			ac.UserZone == userZone &&
+			ac.UserType == types.IRODSUserRodsGroup &&
 			(ac.AccessLevel == types.IRODSAccessLevelReadObject ||
 				ac.AccessLevel == types.IRODSAccessLevelOwner) {
 			logger.Trace().
