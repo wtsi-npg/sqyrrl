@@ -23,8 +23,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/cyverse/go-irodsclient/config"
@@ -232,33 +230,11 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		return false, err
 	}
 
-	var userGroups []*types.IRODSUser
-	// WARNING: go-irodsclient is currently zone/federation unaware.
-	// The iRODS zone used together with OIDC user ids, and which is used for checking
-	// user based ACLs, cannot be used when checking (the membership of) groups used for
-	// iRODS ACLs. i.e. we would ideally be calling something like
-	//   userGroups, err = filesystem.ListUserGroups(userName, userZone)
-	// instead of the following:
-	userGroups, err = filesystem.ListUserGroups(userName)
-	if err != nil {
-		return false, err
-	}
-
-	groupNames := make([]string, 0, len(userGroups))
-	userGroupLookup := make(map[string]struct{}, len(userGroups))
-	for _, group := range userGroups {
-		groupNames = append(groupNames, group.Name)
-		userGroupLookup[group.Name] = struct{}{}
-	}
-	slices.Sort(groupNames)
-
 	logger.Trace().
 		Str("path", rodsPath).
 		Int("num_acls_for_path", len(acl)).
 		Str("user", userName).
 		Str("zone", userZone).
-		Int("num_groups_for_user", len(userGroups)).
-		Str("groups", fmt.Sprintf("[%v]", strings.Join(groupNames, ", "))).
 		Msg("Checking read access")
 
 	for _, ac := range acl {
@@ -304,14 +280,17 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 		// There is permission for a group the user is in
 		case types.IRODSUserRodsGroup:
-			// Check if user in the group of this AC (ac.UserName is the name of the AC's group, unfortunately)
-			_, userInGroup := userGroupLookup[ac.UserName]
+			// ac.UserName is the name of the AC's group, unfortunately
 
 			// note a "acUserZone == userZone" check would be wrong here as:
 			// - acUserZone is for the group whilst userZone is for the user (in the group)
 			// - groups (assumed to be) only for the zone being served - no federation of groups
 			// - equivalent zone check is done in the group membership logic
 			if acUserZone == localZone {
+				var userInGroup bool
+				if userInGroup, err = UserInGroup(logger, filesystem, userName, userZone, ac.UserName); err != nil {
+					return false, err
+				}
 				if userInGroup && (hasRead || hasOwn) {
 					logger.Trace().
 						Str("path", rodsPath).
@@ -349,7 +328,6 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 					Str("ac_level", string(ac.AccessLevel)).
 					Bool("read", hasRead).
 					Bool("own", hasOwn).
-					Bool("user_in_group", userInGroup).
 					Msg("Developer assumption of groups only being available for local zone broken")
 			}
 
@@ -381,33 +359,22 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 
 func UserInGroup(logger zerolog.Logger, filesystem *ifs.FileSystem,
 	userName string, userZone string, groupName string) (_ bool, err error) {
-	var groups []*types.IRODSUser
-	if groups, err = filesystem.ListUserGroups(userName); err != nil {
+
+	var groupMembers []*types.IRODSUser
+	if groupMembers, err = filesystem.ListGroupUsers(groupName); err != nil {
 		return false, err
 	}
-
-	// IRODSUser isn't comparable. Make sure they are handled in a predictable order
-	groupLookup := make(map[string]*types.IRODSUser, len(groups))
-	groupNames := make([]string, 0, len(groups))
-	for _, group := range groups {
-		groupLookup[group.Name] = group
-		groupNames = append(groupNames, group.Name)
-	}
-	slices.Sort(groupNames)
-
-	for _, name := range groupNames {
-		group := groupLookup[name]
-		ok := (group.Zone == "" || group.Zone == userZone) && group.Name == groupName
-
+	for _, member := range groupMembers {
+		isMember := userName == member.Name && userZone == member.Zone
 		logger.Trace().
 			Str("user", userName).
 			Str("zone", userZone).
-			Str("query_group", groupName).
-			Str("actual_group", group.Name).
-			Bool("in", ok).
-			Msg("Checking user group")
-
-		if ok {
+			Str("group", groupName).
+			Str("member_name", member.Name).
+			Str("member_zone", member.Zone).
+			Bool("is_member", isMember).
+			Msg("Checking group for user")
+		if isMember {
 			return true, nil
 		}
 	}
