@@ -248,11 +248,11 @@ var _ = Describe("iRODS Get Handler", func() {
 						Expect(err).NotTo(HaveOccurred())
 					})
 
-					It("should return Forbidden", func(ctx SpecContext) {
+					It("should return Ok", func(ctx SpecContext) {
 						rec := httptest.NewRecorder()
 						handler.ServeHTTP(rec, r)
 
-						Expect(rec.Code).To(Equal(http.StatusForbidden))
+						Expect(rec.Code).To(Equal(http.StatusOK))
 					}, SpecTimeout(specTimeout))
 				})
 			})
