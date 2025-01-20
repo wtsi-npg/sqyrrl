@@ -34,6 +34,8 @@ import (
 	"github.com/rs/zerolog/hlog"
 )
 
+const RedirectURIState = "redirect_uri"
+
 // HandlerChain is a function that takes an http.Handler and returns a new http.Handler
 // wrapping the input handler. Each handler in the chain should process the request in
 // some way, and then call the next handler. Ideally, the functionality of each handler
@@ -107,45 +109,54 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 	})
 }
 
+// RedirectToIdentityServer redirects the user to the identity server for use within
+// the LoginHandler and iRODSGetHandler on finding authenticaiton required.
+func RedirectToIdentityServer(w http.ResponseWriter, r *http.Request, server *SqyrrlServer, redirect_uri string) {
+	logger := server.logger
+	logger.Trace().Msg("LoginHandler called")
+
+	req, _ := httputil.DumpRequest(r, true)
+	logger.Trace().Str("request", string(req)).Msg("HandleLogin request")
+
+	if !server.sqyrrlConfig.EnableOIDC {
+		logger.Error().Msg("OIDC is not enabled")
+		writeErrorResponse(logger, w, http.StatusForbidden)
+		return
+	}
+
+	w.Header().Add("Cache-Control", "no-cache") // See https://github.com/okta/samples-golang/issues/20
+
+	state, err := cryptoRandString(16) // Minimum 128 bits required
+	if err != nil {
+		logger.Err(err).Msg("Failed to generate a random state")
+		writeErrorResponse(logger, w, http.StatusInternalServerError)
+		return
+	}
+
+	// https://github.com/OWASP/CheatSheetSeries/blob/master/cheatsheets/Session_Management_Cheat_Sheet.md#renew-the-session-id-after-any-privilege-level-change
+	err = server.sessionManager.RenewToken(r.Context())
+	if err != nil {
+		logger.Err(err).Msg("Failed to renew session token")
+		writeErrorResponse(logger, w, http.StatusInternalServerError)
+		return
+	}
+	server.sessionManager.Put(r.Context(), SessionKeyState, state)
+	// store where to send the user after login
+	server.sessionManager.Put(r.Context(), RedirectURIState, redirect_uri)
+
+	authURL := server.oauth2Config.AuthCodeURL(state)
+	logger.Info().
+		Str("auth_redirect_url", authURL).
+		Str("state", state).
+		Str("eventual_redirect_uri", redirect_uri).
+		Msg("Redirecting to auth URL")
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
 func HandleLogin(server *SqyrrlServer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger := server.logger
-		logger.Trace().Msg("LoginHandler called")
-
-		req, _ := httputil.DumpRequest(r, true)
-		logger.Trace().Str("request", string(req)).Msg("HandleLogin request")
-
-		if !server.sqyrrlConfig.EnableOIDC {
-			logger.Error().Msg("OIDC is not enabled")
-			writeErrorResponse(logger, w, http.StatusForbidden)
-			return
-		}
-
-		w.Header().Add("Cache-Control", "no-cache") // See https://github.com/okta/samples-golang/issues/20
-
-		state, err := cryptoRandString(16) // Minimum 128 bits required
-		if err != nil {
-			logger.Err(err).Msg("Failed to generate a random state")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
-			return
-		}
-
-		// https://github.com/OWASP/CheatSheetSeries/blob/master/cheatsheets/Session_Management_Cheat_Sheet.md#renew-the-session-id-after-any-privilege-level-change
-		err = server.sessionManager.RenewToken(r.Context())
-		if err != nil {
-			logger.Err(err).Msg("Failed to renew session token")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
-			return
-		}
-		server.sessionManager.Put(r.Context(), SessionKeyState, state)
-
-		authURL := server.oauth2Config.AuthCodeURL(state)
-		logger.Info().
-			Str("auth_url", authURL).
-			Str("state", state).
-			Msg("Redirecting to auth URL")
-
-		http.Redirect(w, r, authURL, http.StatusFound)
+		RedirectToIdentityServer(w, r, server, "")
 	})
 }
 
@@ -232,9 +243,12 @@ func HandleAuthCallback(server *SqyrrlServer) http.Handler {
 			Str("email", claims.Email).
 			Msg("User logged in")
 
-		logger.Debug().Msg("Redirecting logged in user to home page")
+		// find where to send the user after login - could be the home page or a path requiring auth
+		redirect_uri := "/" + server.sessionManager.GetString(r.Context(), RedirectURIState)
 
-		http.Redirect(w, r, "/", http.StatusFound)
+		logger.Debug().Str("redirect_uri", redirect_uri).Msg("Redirecting logged in user")
+
+		http.Redirect(w, r, redirect_uri, http.StatusFound)
 	})
 }
 
@@ -383,8 +397,8 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 
 				logger.Info().
 					Str("path", objPath).
-					Msg("Requested path is not public readable")
-				writeErrorResponse(logger, w, http.StatusForbidden)
+					Msg("Requested path is not public readable - redirecting to login")
+				RedirectToIdentityServer(w, r, server, r.URL.Path)
 				return
 			}
 		}
