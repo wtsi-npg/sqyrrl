@@ -1,0 +1,29 @@
+
+services:
+    devcontainer:
+      image: "mcr.microsoft.com/devcontainers/base:jammy"
+      #image: "mcr.microsoft.com/devcontainers/go:dev-1.23-bookworm"
+      volumes:
+        - ..:/workspaces/host/sqyrrl:ro,cached
+        # above has all the normal pain of mismatched user:group ids
+        - sqyrrldev:/workspaces/volume:rw
+      network_mode: service:irodsserver
+      command: sleep infinity
+
+    irodsserver:
+      #container_name: irods-server
+      image: "ghcr.io/wtsi-npg/ub-16.04-irods-4.2.7:latest"
+      platform: linux/amd64
+      ports:
+        - "127.0.0.1:1247:1247"
+        - "127.0.0.1:20000-20199:20000-20199"
+      restart: always
+      healthcheck:
+        test: ["CMD", "nc", "-z", "-v", "127.0.0.1", "1247"]
+        start_period: 30s
+        interval: 5s
+        timeout: 10s
+        retries: 12
+
+volumes:
+  sqyrrldev:
