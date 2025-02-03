@@ -392,13 +392,19 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 					writeErrorResponse(logger, w, http.StatusForbidden)
 					return
 				}
-			} else {
+			} else if server.sqyrrlConfig.EnableOIDC {
 				logger.Debug().Msg("User is not authenticated")
 
 				logger.Info().
 					Str("path", objPath).
 					Msg("Requested path is not public readable - redirecting to login")
 				RedirectToIdentityServer(w, r, server, r.URL.Path)
+				return
+			} else {
+				logger.Info().
+					Str("path", objPath).
+					Msg("Requested path is not public readable - and no OIDC enabled")
+				writeErrorResponse(logger, w, http.StatusForbidden)
 				return
 			}
 		}
