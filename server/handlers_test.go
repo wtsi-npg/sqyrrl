@@ -172,6 +172,7 @@ var _ = Describe("iRODS Get Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				r, err = http.NewRequest("GET", getURL, nil)
+				Expect(err).NotTo(HaveOccurred())
 			})
 
 			When("the user is not in the public group", func() {

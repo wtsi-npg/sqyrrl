@@ -20,15 +20,16 @@ package server_test
 import (
 	"errors"
 	"fmt"
-	"github.com/alexedwards/scs/v2"
-	"github.com/cyverse/go-irodsclient/config"
-	"github.com/cyverse/go-irodsclient/irods/connection"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/alexedwards/scs/v2"
+	"github.com/cyverse/go-irodsclient/config"
+	"github.com/cyverse/go-irodsclient/irods/connection"
 
 	"github.com/cyverse/go-irodsclient/fs"
 	ifs "github.com/cyverse/go-irodsclient/irods/fs"
@@ -195,6 +196,7 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 		Expect(err).NotTo(HaveOccurred())
 		if !inGroup {
 			err = ifs.AddGroupMember(suiteConn, group, userInOthers, testZone)
+			Expect(err).NotTo(HaveOccurred())
 		}
 	}
 

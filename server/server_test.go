@@ -2,12 +2,13 @@ package server_test
 
 import (
 	"crypto/tls"
-	"github.com/alexedwards/scs/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sync"
+
+	"github.com/alexedwards/scs/v2"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -112,6 +113,7 @@ var _ = Describe("Server startup and shutdown", func() {
 		It("returns an error", func() {
 			config.IRODSEnvFilePath = "nonexistent.json"
 			err := server.Configure(suiteLogger, &config)
+			Expect(err).NotTo(HaveOccurred())
 
 			_, err = server.NewSqyrrlServer(suiteLogger, &config, scs.New())
 			Expect(err).To(MatchError("stat nonexistent.json: no such file or directory"))
