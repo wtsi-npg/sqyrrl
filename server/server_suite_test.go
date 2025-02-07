@@ -241,13 +241,14 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	sqyrrlServer, err = server.NewSqyrrlServer(suiteLogger, &sqyrrlConfig, sessManager)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = sqyrrlServer.StartBackground()
-	Expect(err).NotTo(HaveOccurred())
+	// server could be started here if testing with network connections e.g.
+	// err = sqyrrlServer.StartBackground()
+	// Expect(err).NotTo(HaveOccurred())
 }, NodeTimeout(time.Second*20))
 
 // Release the iRODS filesystem
 var _ = AfterSuite(func() {
-	sqyrrlServer.Stop()
+	sqyrrlServer.Stop() // no-op unless server has been started
 	irodsFS.Release()
 
 	// Clean up any auth file that may have been created
