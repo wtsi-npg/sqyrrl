@@ -216,13 +216,14 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			break
 		}
 	}
+
+	subLogger := logger.With().
+		Str("path", rodsPath).
+		Str("user", userName).
+		Str("zone", userZone).Logger()
+
 	if !localUserExists {
-		logger.Trace().
-			Str("path", rodsPath).
-			Str("user", userName).
-			Str("zone", userZone).
-			Bool("localUserExists", localUserExists).
-			Msg("No local iRODS user")
+		subLogger.Warn().Msg("Expected local iRODS user does not exist")
 		return false, nil
 	}
 
@@ -230,11 +231,8 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		return false, err
 	}
 
-	logger.Trace().
-		Str("path", rodsPath).
+	subLogger.Trace().
 		Int("num_acls_for_path", len(acl)).
-		Str("user", userName).
-		Str("zone", userZone).
 		Msg("Checking read access")
 
 	for _, ac := range acl {
@@ -249,34 +247,20 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		hasRead := ac.AccessLevel == types.IRODSAccessLevelReadObject
 		hasOwn := ac.AccessLevel == types.IRODSAccessLevelOwner
 
+		aclLogger := subLogger.With().
+			Str("ac_user", ac.UserName).
+			Str("ac_zone", acUserZone).
+			Str("ac_level", string(ac.AccessLevel)).
+			Bool("read", hasRead).
+			Bool("own", hasOwn).Logger()
+
 		switch ac.UserType {
 		// There is permission directly for the user
 		case types.IRODSUserRodsUser, types.IRODSUserRodsAdmin, types.IRODSUserGroupAdmin:
 			if acUserZone == userZone && ac.UserName == userName && (hasRead || hasOwn) {
-				logger.Trace().
-					Str("path", rodsPath).
-					Str("user", userName).
-					Str("zone", userZone).
-					Str("ac_user", ac.UserName).
-					Str("ac_zone", acUserZone).
-					Str("ac_level", string(ac.AccessLevel)).
-					Bool("read", hasRead).
-					Bool("own", hasOwn).
-					Msg("User access found")
-
+				aclLogger.Trace().Msg(fmt.Sprintf("User access granted"))
 				return true, nil
 			}
-
-			logger.Trace().
-				Str("path", rodsPath).
-				Str("user", userName).
-				Str("zone", userZone).
-				Str("ac_user", ac.UserName).
-				Str("ac_zone", acUserZone).
-				Str("ac_level", string(ac.AccessLevel)).
-				Bool("read", hasRead).
-				Bool("own", hasOwn).
-				Msg("User read access not found")
 
 		// There is permission for a group the user is in
 		case types.IRODSUserRodsGroup:
@@ -286,73 +270,29 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 			// - acUserZone is for the group whilst userZone is for the user (in the group)
 			// - groups (assumed to be) only for the zone being served - no federation of groups
 			// - equivalent zone check is done in the group membership logic
-			if acUserZone == localZone {
-				var userInGroup bool
-				if userInGroup, err = UserInGroup(logger, filesystem, userName, userZone, ac.UserName); err != nil {
-					return false, err
-				}
-				if userInGroup && (hasRead || hasOwn) {
-					logger.Trace().
-						Str("path", rodsPath).
-						Str("user", userName).
-						Str("zone", userZone).
-						Str("ac_user(group)", ac.UserName).
-						Str("ac_zone(group)", acUserZone).
-						Str("ac_level", string(ac.AccessLevel)).
-						Bool("read", hasRead).
-						Bool("own", hasOwn).
-						Bool("user_in_group", userInGroup).
-						Msg("Group access found")
+			if acUserZone != localZone {
+				aclLogger.Warn().Msg("Developer assumption of groups only being " +
+					"available for local zone broken")
+				continue
+			}
 
-					return true, nil
-				}
+			var userInGroup bool
+			if userInGroup, err = UserInGroup(logger, filesystem, userName, userZone, ac.UserName); err != nil {
+				return false, err
+			}
 
-				logger.Trace().
-					Str("path", rodsPath).
-					Str("user", userName).
-					Str("zone", userZone).
-					Str("ac_user(group)", ac.UserName).
-					Str("ac(group)", acUserZone).
-					Str("ac_level", string(ac.AccessLevel)).
-					Bool("read", hasRead).
-					Bool("own", hasOwn).
-					Bool("user_in_group", userInGroup).
-					Msg("Group access not found")
-			} else {
-				logger.Warn().
-					Str("path", rodsPath).
-					Str("user", userName).
-					Str("zone", userZone).
-					Str("ac_user(group)", ac.UserName).
-					Str("ac(group)", acUserZone).
-					Str("ac_level", string(ac.AccessLevel)).
-					Bool("read", hasRead).
-					Bool("own", hasOwn).
-					Msg("Developer assumption of groups only being available for local zone broken")
+			if userInGroup && (hasRead || hasOwn) {
+				aclLogger.Trace().Msg(fmt.Sprintf("Group access granted"))
+				return true, nil
 			}
 
 		default:
-			logger.Error().
-				Str("path", rodsPath).
-				Str("user", userName).
-				Str("zone", userZone).
-				Str("ac_type", string(ac.UserType)).
-				Str("ac_user", ac.UserName).
-				Str("ac_zone", acUserZone).
-				Str("ac_level", string(ac.AccessLevel)).
-				Bool("read", hasRead).
-				Bool("own", hasOwn).
-				Msg("acl user type not accounted for")
-
-			return false, errors.New("acl user type not accounted for")
+			return false, errors.New("ACL user type not accounted for")
 		}
 	}
 
-	logger.Trace().
-		Str("path", rodsPath).
-		Str("user", userName).
-		Str("zone", userZone).
-		Msg("No access found")
+	subLogger.Trace().
+		Msg("Access not granted")
 
 	return false, nil
 }
