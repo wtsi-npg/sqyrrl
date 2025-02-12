@@ -20,16 +20,15 @@ package server_test
 import (
 	"errors"
 	"fmt"
+	"github.com/alexedwards/scs/v2"
+	"github.com/cyverse/go-irodsclient/config"
+	"github.com/cyverse/go-irodsclient/irods/connection"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
-
-	"github.com/alexedwards/scs/v2"
-	"github.com/cyverse/go-irodsclient/config"
-	"github.com/cyverse/go-irodsclient/irods/connection"
 
 	"github.com/cyverse/go-irodsclient/fs"
 	ifs "github.com/cyverse/go-irodsclient/irods/fs"
@@ -56,15 +55,21 @@ var (
 	testZone = "testZone"
 	rootColl = fmt.Sprintf("/%s/home/irods", testZone)
 
-	emptyGroup     = "empty_group"
-	populatedGroup = "populated_group"
+	emptyGroup     = "empty_group#testZone"
+	populatedGroup = "populated_group#testZone"
 
-	userInPublic    = "user_in_public"
-	userNotInPublic = "user_not_in_public"
+	userInPublic    = "user_in_public#testZone"
+	userNotInPublic = "user_not_in_public#testZone"
 
 	// This is to test cases where a user is a member of multiple groups
-	otherGroups  = []string{"group_1", "group_2", "group_3", "group_4", "group_5"}
-	userInOthers = "user_in_others"
+	otherGroups = []string{
+		"group_1#testZone",
+		"group_2#testZone",
+		"group_3#testZone",
+		"group_4#testZone",
+		"group_5#testZone",
+	}
+	userInOthers = "user_in_others#testZone"
 
 	sqyrrlConfig server.Config
 	sessManager  *scs.SessionManager
@@ -136,8 +141,9 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	}
 
 	for _, userName := range testUsers {
-		if _, ok := currentUsers[userName]; !ok {
-			err = ifs.CreateUser(suiteConn, userName, testZone, string(types.IRODSUserRodsUser))
+		user := server.ParseUser(userName)
+		if _, ok := currentUsers[user.Name]; !ok {
+			err = ifs.CreateUser(suiteConn, user.Name, user.Zone, string(types.IRODSUserRodsUser))
 			Expect(err).NotTo(HaveOccurred())
 		}
 	}
@@ -149,13 +155,14 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	groups, err = ifs.ListGroups(suiteConn)
 	Expect(err).NotTo(HaveOccurred())
 
-	for _, g := range groups {
-		currentGroups[g.Name] = struct{}{}
+	for _, group := range groups {
+		currentGroups[group.Name] = struct{}{}
 	}
 
 	for _, groupName := range testGroups {
-		if _, ok := currentGroups[groupName]; !ok {
-			err = ifs.CreateGroup(suiteConn, groupName, string(types.IRODSUserRodsGroup))
+		group := server.ParseUser(groupName)
+		if _, ok := currentGroups[group.Name]; !ok {
+			err = ifs.CreateGroup(suiteConn, group.Name, string(types.IRODSUserRodsGroup))
 			Expect(err).NotTo(HaveOccurred())
 		}
 	}
@@ -165,39 +172,29 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	// be a way to clear the user/group membership cache, so we work around this by
 	// replacing the irodsFS object with a new one.
 
-	var inGroup bool
-	// Ensure userInPublic is in the public group
-	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userInPublic, testZone, server.IRODSPublicGroup)
-	Expect(err).NotTo(HaveOccurred())
-	if !inGroup {
-		err = ifs.AddGroupMember(suiteConn, server.IRODSPublicGroup, userInPublic, testZone)
+	setGroupMembership := func(conn *connection.IRODSConnection, userName, groupName string, isMember bool) {
+		user := server.ParseUser(userName)
+		group := server.ParseUser(groupName)
+		inGroup, err := server.UserInGroup(suiteLogger, irodsFS, user, group)
 		Expect(err).NotTo(HaveOccurred())
-	}
 
-	// Ensure userNotInPublic is not in the public group
-	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userNotInPublic, testZone, server.IRODSPublicGroup)
-	Expect(err).NotTo(HaveOccurred())
-	if inGroup {
-		err = ifs.RemoveGroupMember(suiteConn, server.IRODSPublicGroup, userNotInPublic, testZone)
-		Expect(err).NotTo(HaveOccurred())
-	}
-
-	// Ensure userNotInPublic is in the populated group
-	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userNotInPublic, testZone, populatedGroup)
-	Expect(err).NotTo(HaveOccurred())
-	if !inGroup {
-		err = ifs.AddGroupMember(suiteConn, populatedGroup, userNotInPublic, testZone)
-		Expect(err).NotTo(HaveOccurred())
-	}
-
-	// Ensure userInOthers is in all the other groups
-	for _, group := range otherGroups {
-		inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userInOthers, testZone, group)
-		Expect(err).NotTo(HaveOccurred())
-		if !inGroup {
-			err = ifs.AddGroupMember(suiteConn, group, userInOthers, testZone)
+		if inGroup != isMember {
+			if isMember {
+				suiteLogger.Info().Msgf("Adding user %s to group %s", user.Name, group.Name)
+				err = ifs.AddGroupMember(conn, group.Name, user.Name, testZone)
+			} else {
+				suiteLogger.Info().Msgf("Removing user %s from group %s", user.Name, group.Name)
+				err = ifs.RemoveGroupMember(conn, group.Name, user.Name, testZone)
+			}
 			Expect(err).NotTo(HaveOccurred())
 		}
+	}
+
+	setGroupMembership(suiteConn, userInPublic, server.IRODSPublicGroup, true)
+	setGroupMembership(suiteConn, userNotInPublic, server.IRODSPublicGroup, false)
+	setGroupMembership(suiteConn, userNotInPublic, populatedGroup, true)
+	for _, group := range otherGroups {
+		setGroupMembership(suiteConn, userInOthers, group, true)
 	}
 
 	// Replace irodsFS with a new instance to clear the cache
@@ -205,23 +202,20 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	irodsFS, err = fs.NewFileSystemWithDefault(account, suiteName)
 	Expect(err).NotTo(HaveOccurred())
 
-	// Check that the group membership operations were successful
-	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userInPublic, testZone, server.IRODSPublicGroup)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(inGroup).To(BeTrue())
-
-	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userNotInPublic, testZone, server.IRODSPublicGroup)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(inGroup).To(BeFalse())
-
-	inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userNotInPublic, testZone, populatedGroup)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(inGroup).To(BeTrue())
-
-	for _, group := range otherGroups {
-		inGroup, err = server.UserInGroup(suiteLogger, irodsFS, userInOthers, testZone, group)
+	checkGroupMembership := func(fs *fs.FileSystem, userName, groupName string, shouldBeMember bool) {
+		user := server.ParseUser(userName)
+		group := server.ParseUser(groupName)
+		inGroup, err := server.UserInGroup(suiteLogger, fs, user, group)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(inGroup).To(BeTrue())
+		Expect(inGroup).To(Equal(shouldBeMember))
+	}
+
+	// Check group membership
+	checkGroupMembership(irodsFS, userInPublic, server.IRODSPublicGroup, true)
+	checkGroupMembership(irodsFS, userNotInPublic, server.IRODSPublicGroup, false)
+	checkGroupMembership(irodsFS, userNotInPublic, populatedGroup, true)
+	for _, group := range otherGroups {
+		checkGroupMembership(irodsFS, userInOthers, group, true)
 	}
 
 	// OIDC is not enabled for testing. We test for authenticated cases by creating
@@ -243,14 +237,13 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	sqyrrlServer, err = server.NewSqyrrlServer(suiteLogger, &sqyrrlConfig, sessManager)
 	Expect(err).NotTo(HaveOccurred())
 
-	// server could be started here if testing with network connections e.g.
-	// err = sqyrrlServer.StartBackground()
-	// Expect(err).NotTo(HaveOccurred())
+	err = sqyrrlServer.StartBackground()
+	Expect(err).NotTo(HaveOccurred())
 }, NodeTimeout(time.Second*20))
 
 // Release the iRODS filesystem
 var _ = AfterSuite(func() {
-	sqyrrlServer.Stop() // no-op unless server has been started
+	sqyrrlServer.Stop()
 	irodsFS.Release()
 
 	// Clean up any auth file that may have been created
