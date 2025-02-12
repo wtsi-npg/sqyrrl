@@ -79,6 +79,7 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCIssuerURL    string
 	OIDCRedirectURL  string
+	IRODSZoneForOIDC string // iRODS zone to use with OIDC id for authz
 	IndexInterval    time.Duration
 }
 
@@ -234,6 +235,11 @@ func NewSqyrrlServer(logger zerolog.Logger, config *Config,
 	if iRODSAccount, err = NewIRODSAccount(subLogger, iRODSEnvManager, config.IRODSPassword); err != nil {
 		logger.Err(err).Msg("Failed to get an iRODS account")
 		return nil, err
+	}
+
+	if config.IRODSZoneForOIDC == "" {
+		config.IRODSZoneForOIDC = iRODSAccount.ClientZone
+		logger.Debug().Str("IRODSZoneForOIDC", config.IRODSZoneForOIDC).Msg("Setting IRODSZoneForOIDC to default of client zone")
 	}
 
 	addr := net.JoinHostPort(config.Host, config.Port)
