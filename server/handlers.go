@@ -34,6 +34,8 @@ import (
 	"github.com/rs/zerolog/hlog"
 )
 
+const RedirectURIState = "redirect_uri"
+
 // HandlerChain is a function that takes an http.Handler and returns a new http.Handler
 // wrapping the input handler. Each handler in the chain should process the request in
 // some way, and then call the next handler. Ideally, the functionality of each handler
@@ -107,45 +109,54 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 	})
 }
 
+// RedirectToIdentityServer redirects the user to the identity server for use within
+// the LoginHandler and iRODSGetHandler on finding authenticaiton required.
+func RedirectToIdentityServer(w http.ResponseWriter, r *http.Request, server *SqyrrlServer, redirect_uri string) {
+	logger := server.logger
+	logger.Trace().Msg("LoginHandler called")
+
+	req, _ := httputil.DumpRequest(r, true)
+	logger.Trace().Str("request", string(req)).Msg("HandleLogin request")
+
+	if !server.sqyrrlConfig.EnableOIDC {
+		logger.Error().Msg("OIDC is not enabled")
+		writeErrorResponse(logger, w, http.StatusForbidden)
+		return
+	}
+
+	w.Header().Add("Cache-Control", "no-cache") // See https://github.com/okta/samples-golang/issues/20
+
+	state, err := cryptoRandString(16) // Minimum 128 bits required
+	if err != nil {
+		logger.Err(err).Msg("Failed to generate a random state")
+		writeErrorResponse(logger, w, http.StatusInternalServerError)
+		return
+	}
+
+	// https://github.com/OWASP/CheatSheetSeries/blob/master/cheatsheets/Session_Management_Cheat_Sheet.md#renew-the-session-id-after-any-privilege-level-change
+	err = server.sessionManager.RenewToken(r.Context())
+	if err != nil {
+		logger.Err(err).Msg("Failed to renew session token")
+		writeErrorResponse(logger, w, http.StatusInternalServerError)
+		return
+	}
+	server.sessionManager.Put(r.Context(), SessionKeyState, state)
+	// store where to send the user after login
+	server.sessionManager.Put(r.Context(), RedirectURIState, redirect_uri)
+
+	authURL := server.oauth2Config.AuthCodeURL(state)
+	logger.Info().
+		Str("auth_redirect_url", authURL).
+		Str("state", state).
+		Str("eventual_redirect_uri", redirect_uri).
+		Msg("Redirecting to auth URL")
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
 func HandleLogin(server *SqyrrlServer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger := server.logger
-		logger.Trace().Msg("LoginHandler called")
-
-		req, _ := httputil.DumpRequest(r, true)
-		logger.Trace().Str("request", string(req)).Msg("HandleLogin request")
-
-		if !server.sqyrrlConfig.EnableOIDC {
-			logger.Error().Msg("OIDC is not enabled")
-			writeErrorResponse(logger, w, http.StatusForbidden)
-			return
-		}
-
-		w.Header().Add("Cache-Control", "no-cache") // See https://github.com/okta/samples-golang/issues/20
-
-		state, err := cryptoRandString(16) // Minimum 128 bits required
-		if err != nil {
-			logger.Err(err).Msg("Failed to generate a random state")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
-			return
-		}
-
-		// https://github.com/OWASP/CheatSheetSeries/blob/master/cheatsheets/Session_Management_Cheat_Sheet.md#renew-the-session-id-after-any-privilege-level-change
-		err = server.sessionManager.RenewToken(r.Context())
-		if err != nil {
-			logger.Err(err).Msg("Failed to renew session token")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
-			return
-		}
-		server.sessionManager.Put(r.Context(), SessionKeyState, state)
-
-		authURL := server.oauth2Config.AuthCodeURL(state)
-		logger.Info().
-			Str("auth_url", authURL).
-			Str("state", state).
-			Msg("Redirecting to auth URL")
-
-		http.Redirect(w, r, authURL, http.StatusFound)
+		RedirectToIdentityServer(w, r, server, "")
 	})
 }
 
@@ -232,9 +243,12 @@ func HandleAuthCallback(server *SqyrrlServer) http.Handler {
 			Str("email", claims.Email).
 			Msg("User logged in")
 
-		logger.Debug().Msg("Redirecting logged in user to home page")
+		// find where to send the user after login - could be the home page or a path requiring auth
+		redirect_uri := "/" + server.sessionManager.GetString(r.Context(), RedirectURIState)
 
-		http.Redirect(w, r, "/", http.StatusFound)
+		logger.Debug().Str("redirect_uri", redirect_uri).Msg("Redirecting logged in user")
+
+		http.Redirect(w, r, redirect_uri, http.StatusFound)
 	})
 }
 
@@ -341,45 +355,55 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 		localZone := server.iRODSAccount.ClientZone
 
 		var isReadable bool
+		isReadable, err = IsPublicReadable(logger, rodsFs, objPath)
+		if err != nil {
+			logger.Err(err).Msg("Failed to check if the object is public readable")
+			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			return
+		}
 
-		if server.isAuthenticated(r) {
-			// The username obtained from the email address does not include the iRODS
-			// zone. We use the local zone to which the  Sqyrrl server is connected as
-			// the user's zone.
-			userName := iRODSUsernameFromEmail(logger, server.getSessionUserEmail(r))
-			userZone := server.sqyrrlConfig.IRODSZoneForOIDC
-
-			logger.Debug().Str("user", userName).Msg("User is authenticated")
-
-			isReadable, err = IsReadableByUser(logger, rodsFs, localZone, userName, userZone, objPath)
-			if err != nil {
-				logger.Err(err).Msg("Failed to check if the object is readable")
-				writeErrorResponse(logger, w, http.StatusInternalServerError)
-				return
-			}
-
-			if !isReadable {
-				logger.Info().
-					Str("path", objPath).
-					Str("user", userName).
-					Str("zone", userZone).
-					Msg("Requested path is not readable by this user")
-				writeErrorResponse(logger, w, http.StatusForbidden)
-				return
-			}
+		if isReadable {
+			logger.Debug().
+				Str("path", objPath).
+				Msg("Requested path is public readable")
 		} else {
-			logger.Debug().Msg("User is not authenticated")
-			isReadable, err = IsPublicReadable(logger, rodsFs, objPath)
-			if err != nil {
-				logger.Err(err).Msg("Failed to check if the object is public readable")
-				writeErrorResponse(logger, w, http.StatusInternalServerError)
-				return
-			}
+			if server.isAuthenticated(r) {
+				// The username obtained from the email address does not include the iRODS
+				// zone. We use the local zone to which the  Sqyrrl server is connected as
+				// the user's zone.
+				userName := iRODSUsernameFromEmail(logger, server.getSessionUserEmail(r))
+				userZone := server.sqyrrlConfig.IRODSZoneForOIDC
 
-			if !isReadable {
+				logger.Debug().Str("user", userName).Msg("User is authenticated")
+
+				isReadable, err = IsReadableByUser(logger, rodsFs, localZone, userName, userZone, objPath)
+				if err != nil {
+					logger.Err(err).Msg("Failed to check if the object is readable")
+					writeErrorResponse(logger, w, http.StatusInternalServerError)
+					return
+				}
+
+				if !isReadable {
+					logger.Info().
+						Str("path", objPath).
+						Str("user", userName).
+						Str("zone", userZone).
+						Msg("Requested path is not readable by this user")
+					writeErrorResponse(logger, w, http.StatusForbidden)
+					return
+				}
+			} else if server.sqyrrlConfig.EnableOIDC {
+				logger.Debug().Msg("User is not authenticated")
+
 				logger.Info().
 					Str("path", objPath).
-					Msg("Requested path is not public readable")
+					Msg("Requested path is not public readable - redirecting to login")
+				RedirectToIdentityServer(w, r, server, r.URL.Path)
+				return
+			} else {
+				logger.Info().
+					Str("path", objPath).
+					Msg("Requested path is not public readable - and no OIDC enabled")
 				writeErrorResponse(logger, w, http.StatusForbidden)
 				return
 			}
