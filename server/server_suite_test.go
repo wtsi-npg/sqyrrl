@@ -239,9 +239,9 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	}
 	Eventually(getoidcpage, "1s").Should(BeTrue())
 
-	// OIDC is now enabled for testing. But we still test for authenticated cases by creating
-	// a session manager and populating it with a session that simulates OIDC
-	// authentication.
+	// OIDC is now enabled for testing. But when testing with handlers directly
+	// we test for authenticated cases by creating a session manager and
+	// populating it with a session that simulates OIDC authentication.
 	sqyrrlConfig = server.Config{
 		Host:             "localhost",
 		Port:             "9999",

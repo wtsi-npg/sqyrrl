@@ -366,6 +366,9 @@ var _ = Describe("Authentication Handler", func() {
 					Email: "someuser@somewhere.com",
 				})
 			})
+			AfterEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Pop()
+			})
 
 			var wo *http.Response
 			It("should return a 302 redirect to the Sqyrrl auth callback", func(ctx SpecContext) {
@@ -399,4 +402,168 @@ var _ = Describe("Authentication Handler", func() {
 		})
 	})
 
+})
+
+var _ = Describe("Seamless Auth Flow", func() {
+	var err error
+	var testFile, localPath, remotePath string
+	var workColl string
+
+	BeforeEach(func(ctx SpecContext) {
+		// Put a test file into iRODS
+		workColl = TmpRodsPath(rootColl, "iRODSGetHandler")
+		err := irodsFS.MakeDir(workColl, true)
+		Expect(err).NotTo(HaveOccurred())
+
+		testFile = "test.txt"
+		localPath = filepath.Join("testdata", testFile)
+		remotePath = path.Join(workColl, testFile)
+
+		_, err = irodsFS.UploadFile(localPath, remotePath, "", false, true, true, nil)
+		Expect(err).NotTo(HaveOccurred())
+	}, NodeTimeout(time.Second*5))
+
+	AfterEach(func() {
+		// Remove the test file from iRODS
+		err := irodsFS.RemoveFile(remotePath, true)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = irodsFS.RemoveDir(workColl, true, true)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	When("Accessing a file marked with the public group", func() {
+		var conn *connection.IRODSConnection
+
+		BeforeEach(func(ctx SpecContext) {
+
+			conn, err = irodsFS.GetIOConnection()
+			Expect(err).NotTo(HaveOccurred())
+
+			err = ifs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
+				server.IRODSPublicGroup, testZone, false)
+			Expect(err).NotTo(HaveOccurred())
+		}, NodeTimeout(time.Second*5))
+
+		AfterEach(func() {
+			err := irodsFS.ReturnIOConnection(conn)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should return a 200 OK and correct content", func(ctx SpecContext) {
+			jar, err := cookiejar.New(nil)
+			Expect(err).NotTo(HaveOccurred())
+			insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+			insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			httpclient := &http.Client{ // leave redirect on
+				Transport: insecureTransport,
+				Jar:       jar,
+			}
+			getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
+			Expect(err).NotTo(HaveOccurred())
+			url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
+			wsh, err := httpclient.Get(url.String())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(wsh.StatusCode).To(Equal(http.StatusOK))
+			bodyBytes, err := io.ReadAll(wsh.Body)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(bodyBytes)).To(Equal("test\n"))
+		}, NodeTimeout(time.Second*20))
+	})
+
+	When("Accessing a file not marked with the public group", func() {
+		var conn *connection.IRODSConnection
+
+		BeforeEach(func(ctx SpecContext) {
+
+			conn, err = irodsFS.GetIOConnection()
+			Expect(err).NotTo(HaveOccurred())
+
+			err = ifs.ChangeDataObjectAccess(conn, remotePath, types.IRODSAccessLevelReadObject,
+				server.ParseUser(populatedGroup).Name, testZone, false)
+			Expect(err).NotTo(HaveOccurred())
+		}, NodeTimeout(time.Second*5))
+
+		AfterEach(func() {
+			err := irodsFS.ReturnIOConnection(conn)
+			Expect(err).NotTo(HaveOccurred())
+		})
+		When("not authenticated", func() {
+			It("should return a 403 Forbidden", func(ctx SpecContext) {
+				jar, err := cookiejar.New(nil)
+				Expect(err).NotTo(HaveOccurred())
+				insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+				insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+				httpclient := &http.Client{ // leave redirect on
+					Transport: insecureTransport,
+					Jar:       jar,
+				}
+				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
+				Expect(err).NotTo(HaveOccurred())
+				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
+				wsh, err := httpclient.Get(url.String())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(wsh.StatusCode).To(Equal(http.StatusForbidden))
+			}, NodeTimeout(time.Second*20))
+		})
+		When("authenticated with user who has access", func() {
+			BeforeEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Push(&mockoidc.MockUser{
+					Email: server.ParseUser(userNotInPublic).Name + "@whereever.com",
+				})
+			})
+			AfterEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Pop()
+			})
+			It("should return a 200 OK and correct content", func(ctx SpecContext) {
+				jar, err := cookiejar.New(nil)
+				Expect(err).NotTo(HaveOccurred())
+				insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+				insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+				httpclient := &http.Client{ // leave redirect on
+					Transport: insecureTransport,
+					Jar:       jar,
+				}
+				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
+				Expect(err).NotTo(HaveOccurred())
+				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
+				wsh, err := httpclient.Get(url.String())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(wsh.StatusCode).To(Equal(http.StatusOK))
+				bodyBytes, err := io.ReadAll(wsh.Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(bodyBytes)).To(Equal("test\n"))
+			}, NodeTimeout(time.Second*20))
+		})
+
+		When("authenticated with user who does not have access", func() {
+			BeforeEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Push(&mockoidc.MockUser{
+					Email: server.ParseUser(userInOthers).Name + "@whereever.com",
+				})
+			})
+			AfterEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Pop()
+			})
+			It("should return a 403 forbidden", func(ctx SpecContext) {
+				jar, err := cookiejar.New(nil)
+				Expect(err).NotTo(HaveOccurred())
+				insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+				insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+				httpclient := &http.Client{ // leave redirect on
+					Transport: insecureTransport,
+					Jar:       jar,
+				}
+				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
+				Expect(err).NotTo(HaveOccurred())
+				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
+				wsh, err := httpclient.Get(url.String())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(wsh.StatusCode).To(Equal(http.StatusForbidden))
+				bodyBytes, err := io.ReadAll(wsh.Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(bodyBytes)).To(Not(ContainSubstring("test")))
+			}, NodeTimeout(time.Second*20))
+		})
+	})
 })
