@@ -295,8 +295,8 @@ func IsReadableByUser(logger zerolog.Logger, authoriser Authoriser,
 		case types.IRODSUserRodsGroup:
 			// ac.UserName is the name of the AC's group, unfortunately
 
-			// note a "ac.UserZone == userZone" check would be wrong here as:
-			// - acUserZone is for the group whilst userZone is for the user (in the group)
+			// note a "ac.UserZone == user.Zone" check would be wrong here as:
+			// - ac.UserZone is for the group whilst user.Zone is for the user (in the group)
 			// - groups (assumed to be) only for the zone being served - no federation of groups
 			// - equivalent zone check is done in the group membership logic
 			if ac.UserZone != localZone {
