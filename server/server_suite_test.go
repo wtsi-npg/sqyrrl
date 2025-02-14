@@ -237,8 +237,9 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	sqyrrlServer, err = server.NewSqyrrlServer(suiteLogger, &sqyrrlConfig, sessManager)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = sqyrrlServer.StartBackground()
-	Expect(err).NotTo(HaveOccurred())
+	// server could be started here if testing with network connections
+	// err = sqyrrlServer.StartBackground()
+	// Expect(err).NotTo(HaveOccurred())
 }, NodeTimeout(time.Second*20))
 
 // Release the iRODS filesystem
