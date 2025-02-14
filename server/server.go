@@ -239,7 +239,9 @@ func NewSqyrrlServer(logger zerolog.Logger, config *Config,
 
 	if config.IRODSZoneForOIDC == "" {
 		config.IRODSZoneForOIDC = iRODSAccount.ClientZone
-		logger.Debug().Str("IRODSZoneForOIDC", config.IRODSZoneForOIDC).Msg("Setting IRODSZoneForOIDC to default of client zone")
+		logger.Debug().
+			Str("oidc_zone", config.IRODSZoneForOIDC).
+			Msg("Setting IRODSZoneForOIDC to default of client zone")
 	}
 
 	addr := net.JoinHostPort(config.Host, config.Port)

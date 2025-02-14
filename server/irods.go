@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024. Genome Research Ltd. All rights reserved.
+ * Copyright (C) 2024, 2025. Genome Research Ltd. All rights reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cyverse/go-irodsclient/config"
@@ -30,6 +31,30 @@ import (
 	"github.com/cyverse/go-irodsclient/irods/types"
 	"github.com/rs/zerolog"
 )
+
+func ParseUser(name string) types.IRODSUser {
+	n, z, _ := strings.Cut(name, "#")
+	return types.IRODSUser{Name: n, Zone: z}
+}
+
+// Authoriser is an interface for a subset of the ifs.FileSystem methods, which means
+// that the latter implements the former. This is useful for testing, where a mock
+// implementation of Authoriser can be used.
+type Authoriser interface {
+	// ListUsers returns a list of all iRODS users.
+	ListUsers() ([]*types.IRODSUser, error)
+
+	// ListGroupUsers returns a list of all users in the given iRODS group.
+	ListGroupUsers(group string) ([]*types.IRODSUser, error)
+
+	// ListACLs returns an iRODS access control list for the given path.
+	ListACLs(path string) ([]*types.IRODSAccess, error)
+
+	// Stat returns the metadata for the given path. Authorisation is not checked.
+	// Authoriser implements this to allow its other methods to return FileNotFoundErrors
+	// appropriately.
+	Stat(path string) (*ifs.Entry, error)
+}
 
 const (
 	IRODSEnvFileDefault = "~/.irods/irods_environment.json"
@@ -201,34 +226,46 @@ func NewIRODSAccount(logger zerolog.Logger, manager *config.ICommandsEnvironment
 //
 // A file is considered readable if the user has read access or is in a group that has
 // read access.
-func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
-	localZone string, userName string, userZone string, rodsPath string) (_ bool, err error) {
+func IsReadableByUser(logger zerolog.Logger, authoriser Authoriser,
+	localZone string, user types.IRODSUser, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
 	var users []*types.IRODSUser
 
 	localUserExists := false
-	if users, err = filesystem.ListUsers(); err != nil {
+	if users, err = authoriser.ListUsers(); err != nil {
 		return false, err
 	}
-	for _, user := range users {
-		if user.Name == userName && user.Zone == userZone {
+
+	for _, u := range users {
+		if u.Name == user.Name && u.Zone == user.Zone {
 			localUserExists = true
 			break
 		}
 	}
 
 	subLogger := logger.With().
+		Str("local_zone", localZone).
 		Str("path", rodsPath).
-		Str("user", userName).
-		Str("zone", userZone).Logger()
+		Str("user", user.Name).
+		Str("zone", user.Zone).Logger()
+
+	if _, err = authoriser.Stat(rodsPath); err != nil {
+		return false, err
+	}
 
 	if !localUserExists {
 		subLogger.Warn().Msg("Expected local iRODS user does not exist")
 		return false, nil
 	}
 
-	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
+	// ACL user zone may be empty if it refers to the local zone
+	if acl, err = authoriser.ListACLs(rodsPath); err != nil {
 		return false, err
+	}
+	for _, ac := range acl {
+		if ac.UserZone == "" {
+			ac.UserZone = localZone
+		}
 	}
 
 	subLogger.Trace().
@@ -236,20 +273,12 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		Msg("Checking read access")
 
 	for _, ac := range acl {
-		// ACL user zone may be empty if it refers to the local zone
-		var acUserZone string
-		if ac.UserZone != "" {
-			acUserZone = ac.UserZone
-		} else {
-			acUserZone = localZone
-		}
-
 		hasRead := ac.AccessLevel == types.IRODSAccessLevelReadObject
 		hasOwn := ac.AccessLevel == types.IRODSAccessLevelOwner
 
 		aclLogger := subLogger.With().
 			Str("ac_user", ac.UserName).
-			Str("ac_zone", acUserZone).
+			Str("ac_zone", ac.UserZone).
 			Str("ac_level", string(ac.AccessLevel)).
 			Bool("read", hasRead).
 			Bool("own", hasOwn).Logger()
@@ -257,7 +286,7 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		switch ac.UserType {
 		// There is permission directly for the user
 		case types.IRODSUserRodsUser, types.IRODSUserRodsAdmin, types.IRODSUserGroupAdmin:
-			if acUserZone == userZone && ac.UserName == userName && (hasRead || hasOwn) {
+			if ac.UserName == user.Name && ac.UserZone == user.Zone && (hasRead || hasOwn) {
 				aclLogger.Trace().Msg(fmt.Sprintf("User access granted"))
 				return true, nil
 			}
@@ -266,23 +295,25 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		case types.IRODSUserRodsGroup:
 			// ac.UserName is the name of the AC's group, unfortunately
 
-			// note a "acUserZone == userZone" check would be wrong here as:
-			// - acUserZone is for the group whilst userZone is for the user (in the group)
+			// note a "ac.UserZone == user.Zone" check would be wrong here as:
+			// - ac.UserZone is for the group whilst user.Zone is for the user (in the group)
 			// - groups (assumed to be) only for the zone being served - no federation of groups
 			// - equivalent zone check is done in the group membership logic
-			if acUserZone != localZone {
-				aclLogger.Warn().Msg("Developer assumption of groups only being " +
-					"available for local zone broken")
+			if ac.UserZone != localZone {
+				aclLogger.Warn().
+					Msg("Unexpected group zone in this permission; expected the group " +
+						"zone to equal the local zone")
 				continue
 			}
 
 			var userInGroup bool
-			if userInGroup, err = UserInGroup(logger, filesystem, userName, userZone, ac.UserName); err != nil {
+			group := types.IRODSUser{Name: ac.UserName, Zone: ac.UserZone}
+			if userInGroup, err = UserInGroup(logger, authoriser, user, group); err != nil {
 				return false, err
 			}
 
 			if userInGroup && (hasRead || hasOwn) {
-				aclLogger.Trace().Msg(fmt.Sprintf("Group access granted"))
+				aclLogger.Trace().Msg("Group access granted")
 				return true, nil
 			}
 
@@ -291,41 +322,37 @@ func IsReadableByUser(logger zerolog.Logger, filesystem *ifs.FileSystem,
 		}
 	}
 
-	subLogger.Trace().
-		Msg("Access not granted")
+	subLogger.Trace().Msg("Access not granted")
 
 	return false, nil
 }
 
-func UserInGroup(logger zerolog.Logger, filesystem *ifs.FileSystem,
-	userName string, userZone string, groupName string) (_ bool, err error) {
-
+func UserInGroup(logger zerolog.Logger, authoriser Authoriser,
+	user types.IRODSUser, group types.IRODSUser) (_ bool, err error) {
 	var groupMembers []*types.IRODSUser
-	if groupMembers, err = filesystem.ListGroupUsers(groupName); err != nil {
+	if groupMembers, err = authoriser.ListGroupUsers(group.Name); err != nil {
 		return false, err
 	}
+
+	groupLogger := logger.With().Str("user", user.Name).
+		Str("zone", user.Zone).
+		Str("group", group.Name).
+		Str("group_zone", group.Zone).Logger()
+
 	for _, member := range groupMembers {
-		isMember := userName == member.Name && userZone == member.Zone
-		logger.Trace().
-			Str("user", userName).
-			Str("zone", userZone).
-			Str("group", groupName).
-			Str("member_name", member.Name).
-			Str("member_zone", member.Zone).
-			Bool("is_member", isMember).
-			Msg("Checking group for user")
-		if isMember {
+		if user.Name == member.Name && user.Zone == member.Zone {
+			groupLogger.Trace().Msg("User is in group")
 			return true, nil
 		}
 	}
+	groupLogger.Trace().Msg("User is not in group")
 
 	return false, nil
 }
 
-func IsPublicReadable(logger zerolog.Logger, filesystem *ifs.FileSystem,
-	rodsPath string) (_ bool, err error) {
+func IsPublicReadable(logger zerolog.Logger, authoriser Authoriser, rodsPath string) (_ bool, err error) {
 	var acl []*types.IRODSAccess
-	if acl, err = filesystem.ListACLs(rodsPath); err != nil {
+	if acl, err = authoriser.ListACLs(rodsPath); err != nil {
 		return false, err
 	}
 

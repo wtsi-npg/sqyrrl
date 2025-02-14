@@ -110,8 +110,8 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 }
 
 // RedirectToIdentityServer redirects the user to the identity server for use within
-// the LoginHandler and iRODSGetHandler on finding authenticaiton required.
-func RedirectToIdentityServer(w http.ResponseWriter, r *http.Request, server *SqyrrlServer, redirect_uri string) {
+// the LoginHandler and iRODSGetHandler on finding that authentication is required.
+func RedirectToIdentityServer(w http.ResponseWriter, r *http.Request, server *SqyrrlServer, redirectUri string) {
 	logger := server.logger
 	logger.Trace().Msg("LoginHandler called")
 
@@ -142,13 +142,14 @@ func RedirectToIdentityServer(w http.ResponseWriter, r *http.Request, server *Sq
 	}
 	server.sessionManager.Put(r.Context(), SessionKeyState, state)
 	// store where to send the user after login
-	server.sessionManager.Put(r.Context(), RedirectURIState, redirect_uri)
+	server.sessionManager.Put(r.Context(), RedirectURIState, redirectUri)
 
 	authURL := server.oauth2Config.AuthCodeURL(state)
 	logger.Info().
+		Str("auth_url", authURL).
 		Str("auth_redirect_url", authURL).
 		Str("state", state).
-		Str("eventual_redirect_uri", redirect_uri).
+		Str("eventual_redirect_uri", redirectUri).
 		Msg("Redirecting to auth URL")
 
 	http.Redirect(w, r, authURL, http.StatusFound)
@@ -243,12 +244,15 @@ func HandleAuthCallback(server *SqyrrlServer) http.Handler {
 			Str("email", claims.Email).
 			Msg("User logged in")
 
+		logger.Debug().Msg("Redirecting logged in user to home page")
 		// find where to send the user after login - could be the home page or a path requiring auth
-		redirect_uri := "/" + server.sessionManager.GetString(r.Context(), RedirectURIState)
+		redirectUri := "/" + server.sessionManager.GetString(r.Context(), RedirectURIState)
 
-		logger.Debug().Str("redirect_uri", redirect_uri).Msg("Redirecting logged in user")
+		logger.Debug().
+			Str("redirect_uri", redirectUri).
+			Msg("Redirecting logged in user")
 
-		http.Redirect(w, r, redirect_uri, http.StatusFound)
+		http.Redirect(w, r, redirectUri, http.StatusFound)
 	})
 }
 
@@ -309,21 +313,22 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 		if val := r.Context().Value(correlationIDKey); val != nil {
 			corrID = val.(string)
 		}
-
-		rodsLogger := logger.With().
+		corrLogger := logger.With().
 			Str("correlation_id", corrID).
 			Str("irods", "get").Logger()
 
 		// The path should be clean as it has passed through the ServeMux, but since we're
 		// doing a path.Join, clean it before passing it to iRODS
 		objPath := path.Clean(path.Join("/", r.URL.Path))
-		logger.Debug().Str("path", objPath).Msg("Getting iRODS data object")
+
+		pathLogger := corrLogger.With().Str("path", objPath).Logger()
+		pathLogger.Debug().Msg("Getting iRODS data object")
 
 		var err error
 		var rodsFs *ifs.FileSystem
 		if rodsFs, err = ifs.NewFileSystemWithDefault(server.iRODSAccount, AppName); err != nil {
-			logger.Err(err).Msg("Failed to create an iRODS file system")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			pathLogger.Err(err).Msg("Failed to create an iRODS file system")
+			writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
 			return
 		}
 		defer rodsFs.Release()
@@ -334,82 +339,71 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 		// filesystem.StatFile(objPath) is better because we can check for the error type.
 		if _, err = rodsFs.Stat(objPath); err != nil {
 			if types.IsAuthError(err) {
-				logger.Err(err).
-					Str("path", objPath).
-					Msg("Failed to authenticate with iRODS")
-				writeErrorResponse(logger, w, http.StatusUnauthorized)
+				pathLogger.Err(err).Msg("Failed to authenticate with iRODS")
+				writeErrorResponse(pathLogger, w, http.StatusUnauthorized)
 				return
 			}
 			if types.IsFileNotFoundError(err) {
-				logger.Info().
-					Str("path", objPath).
-					Msg("Requested path does not exist")
-				writeErrorResponse(logger, w, http.StatusNotFound)
+				pathLogger.Info().Msg("Requested path does not exist")
+				writeErrorResponse(pathLogger, w, http.StatusNotFound)
 				return
 			}
-			logger.Err(err).Str("path", objPath).Msg("Failed to stat file")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			pathLogger.Err(err).Msg("Failed to stat file")
+			writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
 			return
 		}
 
 		localZone := server.iRODSAccount.ClientZone
 
 		var isReadable bool
-		isReadable, err = IsPublicReadable(logger, rodsFs, objPath)
+		isReadable, err = IsPublicReadable(corrLogger, rodsFs, objPath)
 		if err != nil {
-			logger.Err(err).Msg("Failed to check if the object is public readable")
-			writeErrorResponse(logger, w, http.StatusInternalServerError)
+			pathLogger.Err(err).Msg("Failed to check if the object is public readable")
+			writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
 			return
 		}
 
-		if isReadable {
-			logger.Debug().
-				Str("path", objPath).
-				Msg("Requested path is public readable")
-		} else {
+		if !isReadable {
 			if server.isAuthenticated(r) {
 				// The username obtained from the email address does not include the iRODS
-				// zone. We use the local zone to which the  Sqyrrl server is connected as
-				// the user's zone.
-				userName := iRODSUsernameFromEmail(logger, server.getSessionUserEmail(r))
-				userZone := server.sqyrrlConfig.IRODSZoneForOIDC
+				// zone. We use configuration info to set the user's zone.
+				name := iRODSUsernameFromEmail(corrLogger, server.getSessionUserEmail(r))
+				zone := server.sqyrrlConfig.IRODSZoneForOIDC
+				user := types.IRODSUser{Name: name, Zone: zone}
 
-				logger.Debug().Str("user", userName).Msg("User is authenticated")
+				userLogger := corrLogger.With().
+					Str("user", name).
+					Str("zone", zone).Logger()
+				userLogger.Debug().Msg("User authenticated")
 
-				isReadable, err = IsReadableByUser(logger, rodsFs, localZone, userName, userZone, objPath)
+				isReadable, err = IsReadableByUser(corrLogger, rodsFs, localZone, user, objPath)
 				if err != nil {
-					logger.Err(err).Msg("Failed to check if the object is readable")
-					writeErrorResponse(logger, w, http.StatusInternalServerError)
+					pathLogger.Err(err).Msg("Failed to check if the object is readable")
+					writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
 					return
 				}
 
 				if !isReadable {
-					logger.Info().
-						Str("path", objPath).
-						Str("user", userName).
-						Str("zone", userZone).
-						Msg("Requested path is not readable by this user")
-					writeErrorResponse(logger, w, http.StatusForbidden)
+					userLogger.Info().Msg("Requested path is not readable by this user")
+					writeErrorResponse(pathLogger, w, http.StatusForbidden)
 					return
 				}
-			} else if server.sqyrrlConfig.EnableOIDC {
-				logger.Debug().Msg("User is not authenticated")
-
-				logger.Info().
-					Str("path", objPath).
-					Msg("Requested path is not public readable - redirecting to login")
-				RedirectToIdentityServer(w, r, server, r.URL.Path)
-				return
 			} else {
-				logger.Info().
-					Str("path", objPath).
-					Msg("Requested path is not public readable - and no OIDC enabled")
-				writeErrorResponse(logger, w, http.StatusForbidden)
+				if server.sqyrrlConfig.EnableOIDC {
+					pathLogger.Debug().Msg("User is not authenticated")
+					pathLogger.Info().Msg("Requested path is not public readable - redirecting to login")
+					RedirectToIdentityServer(w, r, server, r.URL.Path)
+				} else {
+					pathLogger.Info().Msg("Requested path is not public readable - and no OIDC enabled")
+					writeErrorResponse(pathLogger, w, http.StatusForbidden)
+				}
 				return
 			}
+		} else {
+			pathLogger.Debug().Msg("Requested path is public readable")
 		}
 
-		getFileRange(rodsLogger, w, r, rodsFs, objPath)
+		getFileRange(corrLogger, w, r, rodsFs, objPath)
 	})
 }
 
