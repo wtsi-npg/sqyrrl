@@ -366,8 +366,7 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 		if !isReadable {
 			if server.isAuthenticated(r) {
 				// The username obtained from the email address does not include the iRODS
-				// zone. We use the local zone to which the  Sqyrrl server is connected as
-				// the user's zone.
+				// zone. We use configuration info to set the user's zone.
 				name := iRODSUsernameFromEmail(corrLogger, server.getSessionUserEmail(r))
 				zone := server.sqyrrlConfig.IRODSZoneForOIDC
 				user := types.IRODSUser{Name: name, Zone: zone}
