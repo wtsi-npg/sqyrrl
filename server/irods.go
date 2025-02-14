@@ -293,7 +293,7 @@ func IsReadableByUser(logger zerolog.Logger, authoriser Authoriser,
 
 		// There is permission for a group the user is in
 		case types.IRODSUserRodsGroup:
-			// ac.User is the name of the AC's group, unfortunately
+			// ac.UserName is the name of the AC's group, unfortunately
 
 			// note a "ac.UserZone == userZone" check would be wrong here as:
 			// - acUserZone is for the group whilst userZone is for the user (in the group)
