@@ -376,7 +376,7 @@ var _ = Describe("Authentication Handler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ws.StatusCode).To(Equal(http.StatusFound))
 			Expect(ws.Header.Get("Location")).To(ContainSubstring(mockoidcServer.AuthorizationEndpoint()))
-		}, NodeTimeout(time.Second*20))
+		}, NodeTimeout(time.Second*2))
 
 		When("contacting the OIDC server", func() {
 			BeforeEach(func(ctx SpecContext) {
@@ -394,7 +394,7 @@ var _ = Describe("Authentication Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(wo.StatusCode).To(Equal(http.StatusFound))
 				Expect(wo.Header.Get("Location")).To(ContainSubstring(server.EndpointAuthCallback))
-			}, NodeTimeout(time.Second*20))
+			}, NodeTimeout(time.Second*2))
 			When("calling the Sqyrrl auth callback", func() {
 				var wscb *http.Response
 				It("should return a 302 redirect to the home page", func(ctx SpecContext) {
@@ -402,7 +402,7 @@ var _ = Describe("Authentication Handler", func() {
 					Expect(err).NotTo(HaveOccurred())
 					Expect(wscb.StatusCode).To(Equal(http.StatusFound))
 					Expect(wscb.Header.Get("Location")).To(Equal(server.EndpointRoot)) // can do exact check as redirect is relative
-				}, NodeTimeout(time.Second*20))
+				}, NodeTimeout(time.Second*2))
 
 				When("following the redirect to the home page", func() {
 					It("should return a 200 OK and show the user's email", func(ctx SpecContext) {
@@ -414,7 +414,7 @@ var _ = Describe("Authentication Handler", func() {
 						bodyBytes, err := io.ReadAll(wsh.Body)
 						Expect(err).NotTo(HaveOccurred())
 						Expect(string(bodyBytes)).To(ContainSubstring("someuser@somewhere.com"))
-					}, NodeTimeout(time.Second*20))
+					}, NodeTimeout(time.Second*2))
 				})
 			})
 		})
@@ -479,7 +479,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 			bodyBytes, err := io.ReadAll(wsh.Body)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(bodyBytes)).To(Equal("test\n"))
-		}, NodeTimeout(time.Second*20))
+		}, NodeTimeout(time.Second*2))
 	})
 
 	When("Accessing a file not marked with the public group", func() {
@@ -508,7 +508,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 				wsh, err := httpclient.Get(url.String())
 				Expect(err).NotTo(HaveOccurred())
 				Expect(wsh.StatusCode).To(Equal(http.StatusForbidden))
-			}, NodeTimeout(time.Second*20))
+			}, NodeTimeout(time.Second*2))
 		})
 		When("authenticated with user who has access", func() {
 			BeforeEach(func(ctx SpecContext) {
@@ -530,7 +530,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 				bodyBytes, err := io.ReadAll(wsh.Body)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(bodyBytes)).To(Equal("test\n"))
-			}, NodeTimeout(time.Second*20))
+			}, NodeTimeout(time.Second*2))
 		})
 
 		When("authenticated with user who does not have access", func() {
@@ -553,7 +553,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 				bodyBytes, err := io.ReadAll(wsh.Body)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(bodyBytes)).To(Not(ContainSubstring("test")))
-			}, NodeTimeout(time.Second*20))
+			}, NodeTimeout(time.Second*2))
 		})
 	})
 })
