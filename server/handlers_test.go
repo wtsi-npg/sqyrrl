@@ -336,21 +336,39 @@ var _ = Describe("iRODS Get Handler", func() {
 	})
 })
 
+// NewCookieEnabledHTTPClient returns a configured http.Client with cookie support and optional redirect handling.
+// The client is configured with:
+// - A cookie jar for cookie management
+// - An insecure transport that skips TLS certificate verification
+// - Optional redirect handling controlled by the redirect parameter
+//
+// Parameters:
+//   - redirect: if false, the client will not follow redirects and return the redirect response instead
+//
+// Returns:
+//   - *http.Client: configured HTTP client instance
+func NewCookieEnabledHTTPClient(redirect bool) *http.Client {
+	jar, err := cookiejar.New(nil)
+	Expect(err).NotTo(HaveOccurred())
+	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	httpclient := &http.Client{
+		Transport: insecureTransport,
+		Jar:       jar,
+	}
+	if !redirect {
+		httpclient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			// special case to stop the redirect chain
+			return http.ErrUseLastResponse
+		}
+	}
+	return httpclient
+}
+
 var _ = Describe("Authentication Handler", func() {
 	When("Logging in to Sqyrrl", func() {
 		var err error
-		jar, err := cookiejar.New(nil)
-		Expect(err).NotTo(HaveOccurred())
-		insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
-		insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		httpclient := &http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				// special case to stop the redirect chain
-				return http.ErrUseLastResponse
-			},
-			Transport: insecureTransport,
-			Jar:       jar,
-		}
+		httpclient := NewCookieEnabledHTTPClient(false)
 		var ws *http.Response
 		It("should return a 302 redirect to OIDC server", func(ctx SpecContext) {
 			url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: server.EndpointLogin}
@@ -451,14 +469,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 		})
 
 		It("should return a 200 OK and correct content", func(ctx SpecContext) {
-			jar, err := cookiejar.New(nil)
-			Expect(err).NotTo(HaveOccurred())
-			insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
-			insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-			httpclient := &http.Client{ // leave redirect on
-				Transport: insecureTransport,
-				Jar:       jar,
-			}
+			httpclient := NewCookieEnabledHTTPClient(true)
 			getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 			Expect(err).NotTo(HaveOccurred())
 			url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
@@ -490,14 +501,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 		})
 		When("not authenticated", func() {
 			It("should return a 403 Forbidden", func(ctx SpecContext) {
-				jar, err := cookiejar.New(nil)
-				Expect(err).NotTo(HaveOccurred())
-				insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
-				insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-				httpclient := &http.Client{ // leave redirect on
-					Transport: insecureTransport,
-					Jar:       jar,
-				}
+				httpclient := NewCookieEnabledHTTPClient(true)
 				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 				Expect(err).NotTo(HaveOccurred())
 				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
@@ -516,14 +520,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 				mockoidcServer.UserQueue.Pop()
 			})
 			It("should return a 200 OK and correct content", func(ctx SpecContext) {
-				jar, err := cookiejar.New(nil)
-				Expect(err).NotTo(HaveOccurred())
-				insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
-				insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-				httpclient := &http.Client{ // leave redirect on
-					Transport: insecureTransport,
-					Jar:       jar,
-				}
+				httpclient := NewCookieEnabledHTTPClient(true)
 				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 				Expect(err).NotTo(HaveOccurred())
 				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
@@ -546,14 +543,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 				mockoidcServer.UserQueue.Pop()
 			})
 			It("should return a 403 forbidden", func(ctx SpecContext) {
-				jar, err := cookiejar.New(nil)
-				Expect(err).NotTo(HaveOccurred())
-				insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
-				insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-				httpclient := &http.Client{ // leave redirect on
-					Transport: insecureTransport,
-					Jar:       jar,
-				}
+				httpclient := NewCookieEnabledHTTPClient(true)
 				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 				Expect(err).NotTo(HaveOccurred())
 				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
