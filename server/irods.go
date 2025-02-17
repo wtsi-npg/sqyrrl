@@ -287,7 +287,7 @@ func IsReadableByUser(logger zerolog.Logger, authoriser Authoriser,
 		// There is permission directly for the user
 		case types.IRODSUserRodsUser, types.IRODSUserRodsAdmin, types.IRODSUserGroupAdmin:
 			if ac.UserName == user.Name && ac.UserZone == user.Zone && (hasRead || hasOwn) {
-				aclLogger.Trace().Msg(fmt.Sprintf("User access granted"))
+				aclLogger.Trace().Msg("User access granted")
 				return true, nil
 			}
 
