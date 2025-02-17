@@ -87,7 +87,8 @@ var _ = Describe("Server startup and shutdown", func() {
 				err := server.Configure(suiteLogger, &config)
 				Expect(err).NotTo(HaveOccurred())
 
-				envRoot, err := os.UserHomeDir()
+				var envRoot string
+				envRoot, err = os.UserHomeDir()
 				Expect(err).NotTo(HaveOccurred())
 
 				Expect(config.IRODSEnvFilePath).To(Equal(envRoot + "/.irods/irods_environment.json"))

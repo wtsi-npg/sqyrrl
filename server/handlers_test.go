@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024. Genome Research Ltd. All rights reserved.
+ * Copyright (C) 2024, 2025. Genome Research Ltd. All rights reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,7 +18,6 @@
 package server_test
 
 import (
-	"context"
 	"crypto/tls"
 	"io"
 	"net"
@@ -44,7 +43,8 @@ import (
 var _ = Describe("iRODS Get Handler", func() {
 	var specTimeout = time.Second * 5
 	var workColl string
-	var testFile, localPath, remotePath string
+	var localPath, remotePath string
+	var getURL string
 
 	BeforeEach(func(ctx SpecContext) {
 		// Put a test file into iRODS
@@ -52,9 +52,13 @@ var _ = Describe("iRODS Get Handler", func() {
 		err := irodsFS.MakeDir(workColl, true)
 		Expect(err).NotTo(HaveOccurred())
 
-		testFile = "test.txt"
+		testFile := "test.txt"
 		localPath = filepath.Join("testdata", testFile)
 		remotePath = path.Join(workColl, testFile)
+
+		objPath := path.Join(workColl, testFile)
+		getURL, err = url.JoinPath(server.EndpointIRODS, objPath)
+		Expect(err).NotTo(HaveOccurred())
 
 		_, err = irodsFS.UploadFile(localPath, remotePath, "", false, true, true, nil)
 		Expect(err).NotTo(HaveOccurred())
@@ -72,17 +76,17 @@ var _ = Describe("iRODS Get Handler", func() {
 	When("a non-existent path is given", func() {
 		var r *http.Request
 		var handler http.Handler
-		var err error
 
 		BeforeEach(func(ctx SpecContext) {
+			var err error
 			handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 			Expect(err).NotTo(HaveOccurred())
 
 			objPath := path.Join(workColl, "no", "such", "file.txt")
-			getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
+			nonExistentURL, err := url.JoinPath(server.EndpointIRODS, objPath)
 			Expect(err).NotTo(HaveOccurred())
 
-			r, err = http.NewRequest("GET", getURL, nil)
+			r, err = http.NewRequest("GET", nonExistentURL, nil)
 			Expect(err).NotTo(HaveOccurred())
 		}, NodeTimeout(time.Second*2))
 
@@ -99,14 +103,10 @@ var _ = Describe("iRODS Get Handler", func() {
 			When("a valid data object path is given", func() {
 				var r *http.Request
 				var handler http.Handler
-				var err error
 
 				BeforeEach(func(ctx SpecContext) {
+					var err error
 					handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
-					Expect(err).NotTo(HaveOccurred())
-
-					objPath := path.Join(workColl, testFile)
-					getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
 					Expect(err).NotTo(HaveOccurred())
 
 					r, err = http.NewRequest("GET", getURL, nil)
@@ -127,6 +127,7 @@ var _ = Describe("iRODS Get Handler", func() {
 					var conn *connection.IRODSConnection
 
 					BeforeEach(func(ctx SpecContext) {
+						var err error
 						handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 						Expect(err).NotTo(HaveOccurred())
 
@@ -162,19 +163,15 @@ var _ = Describe("iRODS Get Handler", func() {
 		})
 
 		When("the Sqyrrl user is authenticated", func() {
-			var r *http.Request
 			var handler http.Handler
-			var err error
+			var r *http.Request
 
 			var accessToken = "test_access_token"
 			var sessionToken = "test_session_token"
 
 			BeforeEach(func(ctx SpecContext) {
+				var err error
 				handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
-				Expect(err).NotTo(HaveOccurred())
-
-				objPath := path.Join(workColl, testFile)
-				getURL, err := url.JoinPath(server.EndpointIRODS, objPath)
 				Expect(err).NotTo(HaveOccurred())
 
 				r, err = http.NewRequest("GET", getURL, nil)
@@ -185,9 +182,8 @@ var _ = Describe("iRODS Get Handler", func() {
 				BeforeEach(func(ctx SpecContext) {
 					// Populate a session as if the user has authenticated through OIDC
 
-					var c context.Context
 					// There is no session for this token, so a new session will always be created
-					c, err = sessManager.Load(r.Context(), sessionToken)
+					c, err := sessManager.Load(r.Context(), sessionToken)
 
 					user := server.ParseUser(userNotInPublic)
 					sessManager.Put(c, server.SessionKeyAccessToken, accessToken)
@@ -212,6 +208,7 @@ var _ = Describe("iRODS Get Handler", func() {
 						var conn *connection.IRODSConnection
 
 						BeforeEach(func(ctx SpecContext) {
+							var err error
 							handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 							Expect(err).NotTo(HaveOccurred())
 
@@ -242,6 +239,7 @@ var _ = Describe("iRODS Get Handler", func() {
 					var conn *connection.IRODSConnection
 
 					BeforeEach(func(ctx SpecContext) {
+						var err error
 						handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 						Expect(err).NotTo(HaveOccurred())
 
@@ -271,9 +269,8 @@ var _ = Describe("iRODS Get Handler", func() {
 				BeforeEach(func(ctx SpecContext) {
 					// Populate a session as if the user has authenticated through OIDC
 
-					var c context.Context
 					// There is no session for this token, so a new session will always be created
-					c, err = sessManager.Load(r.Context(), sessionToken)
+					c, err := sessManager.Load(r.Context(), sessionToken)
 
 					user := server.ParseUser(userInPublic)
 					sessManager.Put(c, server.SessionKeyAccessToken, accessToken)
@@ -299,6 +296,7 @@ var _ = Describe("iRODS Get Handler", func() {
 					var conn *connection.IRODSConnection
 
 					BeforeEach(func(ctx SpecContext) {
+						var err error
 						handler, err = sqyrrlServer.GetHandler(server.EndpointIRODS)
 						Expect(err).NotTo(HaveOccurred())
 
@@ -336,69 +334,81 @@ var _ = Describe("iRODS Get Handler", func() {
 	})
 })
 
-// NewCookieEnabledHTTPClient returns a configured http.Client with cookie support and optional redirect handling.
-// The client is configured with:
+// NewCookieEnabledHTTPClient returns a configured http.Client with cookie support and
+// optional redirect handling. The client is configured with:
+//
 // - A cookie jar for cookie management
 // - An insecure transport that skips TLS certificate verification
 // - Optional redirect handling controlled by the redirect parameter
 //
 // Parameters:
-//   - redirect: if false, the client will not follow redirects and return the redirect response instead
+//   - redirect: if false, the client will not follow redirects and return the redirect response instead.
 //
 // Returns:
 //   - *http.Client: configured HTTP client instance
 func NewCookieEnabledHTTPClient(redirect bool) *http.Client {
 	jar, err := cookiejar.New(nil)
 	Expect(err).NotTo(HaveOccurred())
+
 	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	httpclient := &http.Client{
+	httpClient := &http.Client{
 		Transport: insecureTransport,
 		Jar:       jar,
 	}
 	if !redirect {
-		httpclient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			// special case to stop the redirect chain
 			return http.ErrUseLastResponse
 		}
 	}
-	return httpclient
+	return httpClient
 }
 
 var _ = Describe("Authentication Handler", func() {
 	When("Logging in to Sqyrrl", func() {
-		var err error
-		httpclient := NewCookieEnabledHTTPClient(false)
 		var ws *http.Response
+		var err error
+
+		httpClient := NewCookieEnabledHTTPClient(false)
+
 		It("should return a 302 redirect to OIDC server", func(ctx SpecContext) {
-			url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: server.EndpointLogin}
-			ws, err = httpclient.Post(url.String(), "application/x-www-form-urlencoded", nil)
+			url := url.URL{
+				Scheme: "https",
+				Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+				Path:   server.EndpointLogin,
+			}
+			ws, err = httpClient.Post(url.String(), "application/x-www-form-urlencoded", nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ws.StatusCode).To(Equal(http.StatusFound))
 			Expect(ws.Header.Get("Location")).To(ContainSubstring(mockoidcServer.AuthorizationEndpoint()))
 		}, NodeTimeout(time.Second*2))
 
 		When("contacting the OIDC server", func() {
+			var wo *http.Response
+
 			BeforeEach(func(ctx SpecContext) {
 				mockoidcServer.UserQueue.Push(&mockoidc.MockUser{
 					Email: "someuser@somewhere.com",
 				})
 			})
+
 			AfterEach(func(ctx SpecContext) {
 				mockoidcServer.UserQueue.Pop()
 			})
 
-			var wo *http.Response
 			It("should return a 302 redirect to the Sqyrrl auth callback", func(ctx SpecContext) {
-				wo, err = httpclient.Get(ws.Header.Get("Location"))
+				wo, err = httpClient.Get(ws.Header.Get("Location"))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(wo.StatusCode).To(Equal(http.StatusFound))
 				Expect(wo.Header.Get("Location")).To(ContainSubstring(server.EndpointAuthCallback))
 			}, NodeTimeout(time.Second*2))
+
 			When("calling the Sqyrrl auth callback", func() {
 				var wscb *http.Response
+
 				It("should return a 302 redirect to the home page", func(ctx SpecContext) {
-					wscb, err = httpclient.Get(wo.Header.Get("Location"))
+					wscb, err = httpClient.Get(wo.Header.Get("Location"))
 					Expect(err).NotTo(HaveOccurred())
 					Expect(wscb.StatusCode).To(Equal(http.StatusFound))
 					Expect(wscb.Header.Get("Location")).To(Equal(server.EndpointRoot)) // can do exact check as redirect is relative
@@ -406,12 +416,19 @@ var _ = Describe("Authentication Handler", func() {
 
 				When("following the redirect to the home page", func() {
 					It("should return a 200 OK and show the user's email", func(ctx SpecContext) {
-						url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: wscb.Header.Get("Location")}
+						var wsh *http.Response
+						url := url.URL{
+							Scheme: "https",
+							Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+							Path:   wscb.Header.Get("Location"),
+						}
 						// need to form url from relative path
-						wsh, err := httpclient.Get(url.String())
+						wsh, err = httpClient.Get(url.String())
 						Expect(err).NotTo(HaveOccurred())
 						Expect(wsh.StatusCode).To(Equal(http.StatusOK))
-						bodyBytes, err := io.ReadAll(wsh.Body)
+
+						var bodyBytes []byte
+						bodyBytes, err = io.ReadAll(wsh.Body)
 						Expect(err).NotTo(HaveOccurred())
 						Expect(string(bodyBytes)).To(ContainSubstring("someuser@somewhere.com"))
 					}, NodeTimeout(time.Second*2))
@@ -423,8 +440,7 @@ var _ = Describe("Authentication Handler", func() {
 })
 
 var _ = Describe("Seamless Auth Flow", func() {
-	var err error
-	var testFile, localPath, remotePath string
+	var localPath, remotePath string
 	var workColl string
 
 	BeforeEach(func(ctx SpecContext) {
@@ -433,7 +449,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 		err := irodsFS.MakeDir(workColl, true)
 		Expect(err).NotTo(HaveOccurred())
 
-		testFile = "test.txt"
+		testFile := "test.txt"
 		localPath = filepath.Join("testdata", testFile)
 		remotePath = path.Join(workColl, testFile)
 
@@ -454,7 +470,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 		var conn *connection.IRODSConnection
 
 		BeforeEach(func(ctx SpecContext) {
-
+			var err error
 			conn, err = irodsFS.GetIOConnection()
 			Expect(err).NotTo(HaveOccurred())
 
@@ -469,14 +485,22 @@ var _ = Describe("Seamless Auth Flow", func() {
 		})
 
 		It("should return a 200 OK and correct content", func(ctx SpecContext) {
-			httpclient := NewCookieEnabledHTTPClient(true)
+			httpClient := NewCookieEnabledHTTPClient(true)
 			getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 			Expect(err).NotTo(HaveOccurred())
-			url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
-			wsh, err := httpclient.Get(url.String())
+
+			var wsh *http.Response
+			url := url.URL{
+				Scheme: "https",
+				Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+				Path:   getURL,
+			}
+			wsh, err = httpClient.Get(url.String())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(wsh.StatusCode).To(Equal(http.StatusOK))
-			bodyBytes, err := io.ReadAll(wsh.Body)
+
+			var bodyBytes []byte
+			bodyBytes, err = io.ReadAll(wsh.Body)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(bodyBytes)).To(Equal("test\n"))
 		}, NodeTimeout(time.Second*2))
@@ -486,7 +510,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 		var conn *connection.IRODSConnection
 
 		BeforeEach(func(ctx SpecContext) {
-
+			var err error
 			conn, err = irodsFS.GetIOConnection()
 			Expect(err).NotTo(HaveOccurred())
 
@@ -499,35 +523,53 @@ var _ = Describe("Seamless Auth Flow", func() {
 			err := irodsFS.ReturnIOConnection(conn)
 			Expect(err).NotTo(HaveOccurred())
 		})
+
 		When("not authenticated", func() {
 			It("should return a 403 Forbidden", func(ctx SpecContext) {
-				httpclient := NewCookieEnabledHTTPClient(true)
+				httpClient := NewCookieEnabledHTTPClient(true)
 				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 				Expect(err).NotTo(HaveOccurred())
-				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
-				wsh, err := httpclient.Get(url.String())
+
+				var wsh *http.Response
+				url := url.URL{
+					Scheme: "https",
+					Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+					Path:   getURL,
+				}
+				wsh, err = httpClient.Get(url.String())
 				Expect(err).NotTo(HaveOccurred())
 				Expect(wsh.StatusCode).To(Equal(http.StatusForbidden))
 			}, NodeTimeout(time.Second*2))
 		})
+
 		When("authenticated with user who has access", func() {
 			BeforeEach(func(ctx SpecContext) {
 				mockoidcServer.UserQueue.Push(&mockoidc.MockUser{
 					Email: server.ParseUser(userNotInPublic).Name + "@whereever.com",
 				})
 			})
+
 			AfterEach(func(ctx SpecContext) {
 				mockoidcServer.UserQueue.Pop()
 			})
+
 			It("should return a 200 OK and correct content", func(ctx SpecContext) {
-				httpclient := NewCookieEnabledHTTPClient(true)
+				httpClient := NewCookieEnabledHTTPClient(true)
 				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 				Expect(err).NotTo(HaveOccurred())
-				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
-				wsh, err := httpclient.Get(url.String())
+
+				var wsh *http.Response
+				url := url.URL{
+					Scheme: "https",
+					Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+					Path:   getURL,
+				}
+				wsh, err = httpClient.Get(url.String())
 				Expect(err).NotTo(HaveOccurred())
 				Expect(wsh.StatusCode).To(Equal(http.StatusOK))
-				bodyBytes, err := io.ReadAll(wsh.Body)
+
+				var bodyBytes []byte
+				bodyBytes, err = io.ReadAll(wsh.Body)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(bodyBytes)).To(Equal("test\n"))
 			}, NodeTimeout(time.Second*2))
@@ -539,18 +581,28 @@ var _ = Describe("Seamless Auth Flow", func() {
 					Email: server.ParseUser(userInOthers).Name + "@whereever.com",
 				})
 			})
+
 			AfterEach(func(ctx SpecContext) {
 				mockoidcServer.UserQueue.Pop()
 			})
+
 			It("should return a 403 forbidden", func(ctx SpecContext) {
-				httpclient := NewCookieEnabledHTTPClient(true)
+				httpClient := NewCookieEnabledHTTPClient(true)
 				getURL, err := url.JoinPath(server.EndpointIRODS, remotePath)
 				Expect(err).NotTo(HaveOccurred())
-				url := url.URL{Scheme: "https", Host: net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port), Path: getURL}
-				wsh, err := httpclient.Get(url.String())
+
+				var wsh *http.Response
+				url := url.URL{
+					Scheme: "https",
+					Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+					Path:   getURL,
+				}
+				wsh, err = httpClient.Get(url.String())
 				Expect(err).NotTo(HaveOccurred())
 				Expect(wsh.StatusCode).To(Equal(http.StatusForbidden))
-				bodyBytes, err := io.ReadAll(wsh.Body)
+
+				var bodyBytes []byte
+				bodyBytes, err = io.ReadAll(wsh.Body)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(bodyBytes)).To(Not(ContainSubstring("test")))
 			}, NodeTimeout(time.Second*2))

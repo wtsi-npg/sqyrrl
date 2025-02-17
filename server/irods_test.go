@@ -47,6 +47,9 @@ type mockAuthoriser struct {
 // names and zones. The membership map is a map of group names to user names that
 // describes the membership of each group.
 //
+// User or group names that do not contain a '#' are assumed to be in the zone specified
+// by the zone parameter and will be qualified with that zone.
+//
 // The ACL returned for any path will show it to be readable by all groups.
 func newMockAuthoriser(userNames, groupNames []string, membership map[string][]string,
 	aclGroups []string) *mockAuthoriser {
@@ -237,20 +240,18 @@ var _ = Describe("Mock authoriser", func() {
 
 var _ = Describe("iRODS functions", func() {
 	var conn *connection.IRODSConnection
-	var workColl string
-	var testFile, localPath, remotePath string
-	var err error
+	var workColl, remotePath string
 
 	var localZone = "testZone"     // This is a real zone on the test server
 	var remoteZone = "anotherZone" // This represents a federated zone on another server
 
 	BeforeEach(func(ctx SpecContext) {
 		workColl = TmpRodsPath(rootColl, "iRODSGetHandler")
-		err = irodsFS.MakeDir(workColl, true)
+		err := irodsFS.MakeDir(workColl, true)
 		Expect(err).NotTo(HaveOccurred())
 
-		testFile = "test.txt"
-		localPath = filepath.Join("testdata", testFile)
+		testFile := "test.txt"
+		localPath := filepath.Join("testdata", testFile)
 		remotePath = path.Join(workColl, testFile)
 
 		_, err = irodsFS.UploadFile(localPath, remotePath, "", false, true, true, nil)
@@ -337,7 +338,7 @@ var _ = Describe("iRODS functions", func() {
 		When("the user is in the local zone", func() {
 			When("the data object has no permissions for the local public group", func() {
 				BeforeEach(func(ctx SpecContext) {
-					err = ifs.ChangeDataObjectAccess(conn, remotePath,
+					err := ifs.ChangeDataObjectAccess(conn, remotePath,
 						types.IRODSAccessLevelNull, server.IRODSPublicGroup, localZone, false)
 					Expect(err).NotTo(HaveOccurred())
 				})
@@ -407,7 +408,7 @@ var _ = Describe("iRODS functions", func() {
 		When("the user is in the local zone", func() {
 			When("the data object has read permissions for the local public group", func() {
 				BeforeEach(func(ctx SpecContext) {
-					err = ifs.ChangeDataObjectAccess(conn, remotePath,
+					err := ifs.ChangeDataObjectAccess(conn, remotePath,
 						types.IRODSAccessLevelReadObject, server.IRODSPublicGroup, localZone, false)
 					Expect(err).NotTo(HaveOccurred())
 				})
@@ -478,7 +479,7 @@ var _ = Describe("iRODS functions", func() {
 			BeforeEach(func(ctx SpecContext) {
 				for _, groupName := range otherGroups {
 					group := server.ParseUser(groupName)
-					err = ifs.ChangeDataObjectAccess(conn, remotePath,
+					err := ifs.ChangeDataObjectAccess(conn, remotePath,
 						types.IRODSAccessLevelReadObject, group.Name, group.Zone, false)
 					Expect(err).NotTo(HaveOccurred())
 				}

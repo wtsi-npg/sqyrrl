@@ -2,8 +2,7 @@
 services:
     irods-server:
       container_name: irods-server
-      # image: "ghcr.io/wtsi-npg/ub-22.04-irods-4.3.2:latest"
-      image: "wsinpg/ub-22.04-irods-4.3.3"
+      image: "ghcr.io/wtsi-npg/ub-16.04-irods-4.2.7:latest"
       platform: linux/amd64
       ports:
         - "127.0.0.1:1247:1247"
