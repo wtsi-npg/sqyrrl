@@ -1,7 +1,6 @@
 module sqyrrl
 
 go 1.23
-
 require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/alexedwards/scs/v2 v2.8.0
@@ -13,7 +12,7 @@ require (
 	github.com/rs/xid v1.6.0
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
-	golang.org/x/oauth2 v0.26.0
+	golang.org/x/oauth2 v0.27.0
 	golang.org/x/term v0.29.0
 )
 
