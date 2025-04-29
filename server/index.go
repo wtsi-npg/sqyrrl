@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024. Genome Research Ltd. All rights reserved.
+ * Copyright (C) 2024, 2025. Genome Research Ltd. All rights reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,6 +44,26 @@ type Item struct {
 	Size     int64  // The size of the item in bytes.
 	Metadata []*types.IRODSMeta
 	ACL      []*types.IRODSAccess
+}
+
+var defaultMetaFilter = func(avu types.IRODSMeta) bool {
+	ignoreAttrs := []string{AccessTimeAttr, CategoryAttr, DublinCoreCreated, IndexAttr}
+	for _, attr := range ignoreAttrs {
+		if avu.Name == attr {
+			return true
+		}
+	}
+	return false
+}
+
+var defaultACLFilter = func(ac types.IRODSAccess) bool {
+	ignoreUsers := []string{"irods", "irods-g1", "rodsBoot"}
+	for _, user := range ignoreUsers {
+		if ac.UserName == user {
+			return true
+		}
+	}
+	return false
 }
 
 // NewItemIndex creates a new item index with the given items.
@@ -140,40 +160,96 @@ func (item *Item) Category() string {
 
 // SizeString returns a human-readable string representing the size of the in iRODS.
 func (item *Item) SizeString() string {
-	if item.Size < 1024 {
-		return fmt.Sprintf("%d B", item.Size)
-	}
+	size := float64(item.Size)
+	kib := float64(1024)
+	mib := 1024 * kib
+	gib := 1024 * mib
 
-	return fmt.Sprintf("%d KiB", item.Size/1024)
+	switch {
+	case size < kib:
+		return fmt.Sprintf("%.0f B", size)
+	case size < mib:
+		return fmt.Sprintf("%.2f KiB", size/kib)
+	case size < gib:
+		return fmt.Sprintf("%.2f MiB", size/mib)
+	default:
+		return fmt.Sprintf("%.2f GiB", size/gib)
+	}
 }
 
 // MetadataStrings returns a sorted list of strings representing the metadata of the item.
-func (item *Item) MetadataStrings() []string {
-	var meta []string
-	for _, m := range item.Metadata {
-		meta = append(meta, fmt.Sprintf("%s=%s", m.Name, m.Value))
+// The metadata are filtered by the given functions, which are applied to each metadata
+// item. If a function returns true, the metadata item is excluded from the result.
+func (item *Item) MetadataStrings(filter ...func(types.IRODSMeta) bool) []string {
+	meta := make([]string, 0, len(item.Metadata))
+
+	for _, avu := range item.Metadata {
+		excluded := false
+		for _, f := range filter {
+			if f(*avu) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			meta = append(meta, fmt.Sprintf("%s=%s", avu.Name, avu.Value))
+		}
 	}
 	slices.Sort(meta)
 
 	return meta
 }
 
-// ACLStrings returns a sorted list of strings representing the ACL of the item.
-func (item *Item) ACLStrings() []string {
-	var acl []string
-	for _, a := range item.ACL {
-		acl = append(acl, fmt.Sprintf("%s#%s:%s", a.UserName, a.UserZone, a.AccessLevel))
+// ACLStrings returns a sorted list of strings representing the ACL of the item. The ACL
+// is filtered by the given functions, which are applied to each access item. If a
+func (item *Item) ACLStrings(filter ...func(types.IRODSAccess) bool) []string {
+	acl := make([]string, 0, len(item.ACL))
+
+	for _, ac := range item.ACL {
+		excluded := false
+		for _, f := range filter {
+			if f(*ac) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			acl = append(acl, fmt.Sprintf("%s#%s:%s", ac.UserName, ac.UserZone, ac.AccessLevel))
+		}
 	}
 	slices.Sort(acl)
 
 	return acl
 }
 
+// FilteredMetadataStrings returns a sorted list of strings representing the metadata of
+// the item, filtered by the default filter function.
+func (item *Item) FilteredMetadataStrings() []string {
+	s := item.MetadataStrings(defaultMetaFilter)
+	if len(s) == 0 {
+		return []string{"No relevant metadata to report"}
+	}
+	return s
+}
+
+// FilteredACLStrings returns a sorted list of strings representing the ACL of the item,
+// filtered by the default filter function.
+func (item *Item) FilteredACLStrings() []string {
+	s := item.ACLStrings(defaultACLFilter)
+	if len(s) == 0 {
+		return []string{"No relevant ACLs to report"}
+	}
+	return s
+}
+
+// String returns a string representation of the item, including its path, category,
+// size, ACL, and metadata. The ACL and metadata are filtered to remove uninformative
+// entries.
 func (item *Item) String() string {
 	return fmt.Sprintf("<Item path='%s' category='%s' size:%d acl:[%s] metadata:[%s]>",
 		item.Path,
 		item.Category(),
 		item.Size,
-		strings.Join(item.ACLStrings(), ", "),
-		strings.Join(item.MetadataStrings(), ", "))
+		strings.Join(item.ACLStrings(), ","),
+		strings.Join(item.MetadataStrings(), ","))
 }
