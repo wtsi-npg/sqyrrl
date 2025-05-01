@@ -64,11 +64,20 @@ const (
 )
 
 const (
-	Namespace          = "sqyrrl"
-	NamespaceSeparator = ":"
-	IndexAttr          = Namespace + NamespaceSeparator + "index"
-	IndexValue         = "1"
-	CategoryAttr       = Namespace + NamespaceSeparator + "category"
+	// Namespace and attributes for metadate belonging to the iRODS system itself
+	IRODSNamespace          = "irods"
+	IRODSNamespaceSeparator = "::"
+	AccessTimeAttr          = IRODSNamespace + IRODSNamespaceSeparator + "access_time"
+
+	// Namespace and attributes for metadata belonging to Sqyrrl
+	SqyrrlNamespace          = "sqyrrl"
+	SqyrrlNamespaceSeparator = ":"
+	IndexAttr                = SqyrrlNamespace + SqyrrlNamespaceSeparator + "index"
+	IndexValue               = "1"
+	CategoryAttr             = SqyrrlNamespace + SqyrrlNamespaceSeparator + "category"
+
+	// Other attributes
+	DublinCoreCreated = "dcterms:created"
 )
 
 // LookupIRODSEnvFilePath returns the path to the iRODS environment file set in the

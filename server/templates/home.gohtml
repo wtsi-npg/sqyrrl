@@ -58,7 +58,7 @@
                         <div class="acl-cell">
                             <div class="acl-bag">
                                 {{ with $citem }}
-                                    {{ range $av := .ACLStrings }}
+                                    {{ range $av := .FilteredACLStrings }}
                                         <div class="acl-item">{{ $av }}</div>
                                     {{ end }}
                                 {{ end }}
@@ -67,7 +67,7 @@
                         <div class="metadata-cell">
                             <div class="metadata-bag">
                                 {{ with $citem }}
-                                    {{ range $av := .MetadataStrings }}
+                                    {{ range $av := .FilteredMetadataStrings }}
                                         <div class="metadata-item">{{ $av }}</div>
                                     {{ end }}
                                 {{ end }}
@@ -92,7 +92,7 @@
                 <div class="acl-cell">
                     <div class="acl-bag">
                         {{ with $citem }}
-                            {{ range $av := .ACLStrings }}
+                            {{ range $av := .FilteredACLStrings }}
                                 <div class="acl-item">{{ $av }}</div>
                             {{ end }}
                         {{ end }}
@@ -101,7 +101,7 @@
                 <div class="metadata-cell">
                     <div class="metadata-bag">
                         {{ with $citem }}
-                            {{ range $av := .MetadataStrings }}
+                            {{ range $av := .FilteredMetadataStrings }}
                                 <div class="metadata-item">{{ $av }}</div>
                             {{ end }}
                         {{ end }}
