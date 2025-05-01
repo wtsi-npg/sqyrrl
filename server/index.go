@@ -201,7 +201,8 @@ func (item *Item) MetadataStrings(filter ...func(types.IRODSMeta) bool) []string
 }
 
 // ACLStrings returns a sorted list of strings representing the ACL of the item. The ACL
-// is filtered by the given functions, which are applied to each access item. If a
+// is filtered by the given functions, which are applied to each access item. If a 
+// function returns true, the access item is excluded from the result.
 func (item *Item) ACLStrings(filter ...func(types.IRODSAccess) bool) []string {
 	acl := make([]string, 0, len(item.ACL))
 
