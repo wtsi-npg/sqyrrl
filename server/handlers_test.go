@@ -158,6 +158,43 @@ var _ = Describe("iRODS Get Handler", func() {
 						Expect(rec.Code).To(Equal(http.StatusOK))
 						Expect(rec.Body.String()).To(Equal("test\n"))
 					}, SpecTimeout(specTimeout))
+
+					When("the requested path contains a hash character", func() {
+						var hashRemotePath string
+						var hashGetURL string
+						var hashRequest *http.Request
+
+						BeforeEach(func(ctx SpecContext) {
+							var err error
+
+							hashRemotePath = path.Join(workColl, "hash#test.txt")
+							hashGetURL, err = url.JoinPath(server.EndpointIRODS, hashRemotePath)
+							Expect(err).NotTo(HaveOccurred())
+
+							_, err = irodsFS.UploadFile(localPath, hashRemotePath, "", false, true, true, nil)
+							Expect(err).NotTo(HaveOccurred())
+
+							err = ifs.ChangeDataObjectAccess(conn, hashRemotePath, types.IRODSAccessLevelReadObject,
+								server.IRODSPublicGroup, testZone, false)
+							Expect(err).NotTo(HaveOccurred())
+
+							hashRequest, err = http.NewRequest("GET", hashGetURL, nil)
+							Expect(err).NotTo(HaveOccurred())
+						}, NodeTimeout(time.Second*5))
+
+						AfterEach(func() {
+							err := irodsFS.RemoveFile(hashRemotePath, true)
+							Expect(err).NotTo(HaveOccurred())
+						})
+
+						It("should serve the correct body content", func(ctx SpecContext) {
+							rec := httptest.NewRecorder()
+							handler.ServeHTTP(rec, hashRequest)
+
+							Expect(rec.Code).To(Equal(http.StatusOK))
+							Expect(rec.Body.String()).To(Equal("test\n"))
+						}, SpecTimeout(specTimeout))
+					})
 				})
 			})
 		})
@@ -606,6 +643,68 @@ var _ = Describe("Seamless Auth Flow", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(bodyBytes)).To(Not(ContainSubstring("test")))
 			}, NodeTimeout(time.Second*2))
+		})
+	})
+
+	When("Accessing a private file whose path contains a hash character", func() {
+		var conn *connection.IRODSConnection
+		var hashRemotePath string
+		var hashGetURL string
+
+		BeforeEach(func(ctx SpecContext) {
+			var err error
+
+			hashRemotePath = path.Join(workColl, "hash#test.txt")
+			hashGetURL, err = url.JoinPath(server.EndpointIRODS, hashRemotePath)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = irodsFS.UploadFile(localPath, hashRemotePath, "", false, true, true, nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			conn, err = irodsFS.GetIOConnection()
+			Expect(err).NotTo(HaveOccurred())
+
+			err = ifs.ChangeDataObjectAccess(conn, hashRemotePath, types.IRODSAccessLevelReadObject,
+				server.ParseUser(populatedGroup).Name, testZone, false)
+			Expect(err).NotTo(HaveOccurred())
+		}, NodeTimeout(time.Second*5))
+
+		AfterEach(func() {
+			err := irodsFS.RemoveFile(hashRemotePath, true)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = irodsFS.ReturnIOConnection(conn)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		When("authenticated with a user who has access", func() {
+			BeforeEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Push(&mockoidc.MockUser{
+					Email: server.ParseUser(userNotInPublic).Name + "@whereever.com",
+				})
+			})
+
+			AfterEach(func(ctx SpecContext) {
+				mockoidcServer.UserQueue.Pop()
+			})
+
+			It("should return a 200 OK and correct content", func(ctx SpecContext) {
+				httpClient := NewCookieEnabledHTTPClient(true)
+
+				var wsh *http.Response
+				u := url.URL{
+					Scheme: "https",
+					Host:   net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+					Path:   hashGetURL,
+				}
+				wsh, err := httpClient.Get(u.String())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(wsh.StatusCode).To(Equal(http.StatusOK))
+
+				bodyBytes, err := io.ReadAll(wsh.Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(bodyBytes)).To(Equal("test\n"))
+			}, NodeTimeout(time.Second*5))
 		})
 	})
 })
