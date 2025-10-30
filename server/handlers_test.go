@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cyverse/go-irodsclient/irods/connection"
@@ -503,7 +504,7 @@ var _ = Describe("Seamless Auth Flow", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	When("Accessing a file marked with the public group", func() {
+	When("Accessing a file marked with the public group via the API endpoint", func() {
 		var conn *connection.IRODSConnection
 
 		BeforeEach(func(ctx SpecContext) {
@@ -541,6 +542,57 @@ var _ = Describe("Seamless Auth Flow", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(bodyBytes)).To(Equal("test\n"))
 		}, NodeTimeout(time.Second*2))
+	})
+
+	When("Accessing a public file whose hash path is requested from the site root", func() {
+		var conn *connection.IRODSConnection
+		var hashRemotePath string
+
+		BeforeEach(func(ctx SpecContext) {
+			var err error
+			conn, err = irodsFS.GetIOConnection()
+			Expect(err).NotTo(HaveOccurred())
+
+			err = irodsFS.MakeDir(workColl, true)
+			Expect(err).NotTo(HaveOccurred())
+
+			hashRemotePath = path.Join(workColl, "hash#test.txt")
+			_, err = irodsFS.UploadFile(localPath, hashRemotePath, "", false, true, true, nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = ifs.ChangeDataObjectAccess(conn, hashRemotePath, types.IRODSAccessLevelReadObject,
+				server.IRODSPublicGroup, testZone, false)
+			Expect(err).NotTo(HaveOccurred())
+		}, NodeTimeout(time.Second*5))
+
+		AfterEach(func() {
+			err := irodsFS.RemoveFile(hashRemotePath, true)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = irodsFS.ReturnIOConnection(conn)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should return a 200 OK and correct content", func(ctx SpecContext) {
+			httpClient := NewCookieEnabledHTTPClient(true)
+
+			rawPath := "/" + strings.TrimPrefix(hashRemotePath, "/")
+			escapedPath := strings.ReplaceAll(rawPath, "#", "%23")
+			target := url.URL{
+				Scheme:  "https",
+				Host:    net.JoinHostPort(sqyrrlConfig.Host, sqyrrlConfig.Port),
+				Path:    rawPath,
+				RawPath: escapedPath,
+			}
+
+			resp, err := httpClient.Get(target.String())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			bodyBytes, err := io.ReadAll(resp.Body)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(bodyBytes)).To(Equal("test\n"))
+		}, NodeTimeout(time.Second*5))
 	})
 
 	When("Accessing a file not marked with the public group", func() {
