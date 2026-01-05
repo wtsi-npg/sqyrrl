@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"path"
 	"time"
 
@@ -61,7 +62,7 @@ func HandleHomePage(server *SqyrrlServer) http.Handler {
 				return
 			}
 
-			redirect := path.Join(EndpointIRODS, requestPath)
+			redirect := path.Join(EndpointIRODS, r.URL.EscapedPath())
 			logger.Trace().
 				Str("from", requestPath).
 				Str("to", redirect).
@@ -246,13 +247,16 @@ func HandleAuthCallback(server *SqyrrlServer) http.Handler {
 
 		logger.Debug().Msg("Redirecting logged in user to home page")
 		// find where to send the user after login - could be the home page or a path requiring auth
-		redirectUri := "/" + server.sessionManager.GetString(r.Context(), RedirectURIState)
+		redirectURI := server.sessionManager.GetString(r.Context(), RedirectURIState)
+		if redirectURI == "" {
+			redirectURI = EndpointRoot
+		}
 
 		logger.Debug().
-			Str("redirect_uri", redirectUri).
+			Str("redirect_uri", redirectURI).
 			Msg("Redirecting logged in user")
 
-		http.Redirect(w, r, redirectUri, http.StatusFound)
+		http.Redirect(w, r, redirectURI, http.StatusFound)
 	})
 }
 
@@ -317,14 +321,22 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 			Str("correlation_id", corrID).
 			Str("irods", "get").Logger()
 
+		decodedPath, err := url.PathUnescape(r.URL.Path)
+		if err != nil {
+			corrLogger.Err(err).
+				Str("path", r.URL.Path).
+				Msg("Failed to decode request path")
+			writeErrorResponse(corrLogger, w, http.StatusBadRequest)
+			return
+		}
+
 		// The path should be clean as it has passed through the ServeMux, but since we're
-		// doing a path.Join, clean it before passing it to iRODS
-		objPath := path.Clean(path.Join("/", r.URL.Path))
+		// doing a path.Join, clean it before passing it to iRODS.
+		objPath := path.Clean(path.Join("/", decodedPath))
 
 		pathLogger := corrLogger.With().Str("path", objPath).Logger()
 		pathLogger.Debug().Msg("Getting iRODS data object")
 
-		var err error
 		var rodsFs *ifs.FileSystem
 		if rodsFs, err = ifs.NewFileSystemWithDefault(server.iRODSAccount, AppName); err != nil {
 			pathLogger.Err(err).Msg("Failed to create an iRODS file system")
@@ -392,7 +404,9 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 				if server.sqyrrlConfig.EnableOIDC {
 					pathLogger.Debug().Msg("User is not authenticated")
 					pathLogger.Info().Msg("Requested path is not public readable - redirecting to login")
-					RedirectToIdentityServer(w, r, server, r.URL.Path)
+
+					loginRedirect := path.Join(EndpointIRODS, r.URL.EscapedPath())
+					RedirectToIdentityServer(w, r, server, loginRedirect)
 				} else {
 					pathLogger.Info().Msg("Requested path is not public readable - and no OIDC enabled")
 					writeErrorResponse(pathLogger, w, http.StatusForbidden)
