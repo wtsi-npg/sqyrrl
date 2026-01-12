@@ -8,7 +8,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/cyverse/go-irodsclient v0.15.7-0.20241106203458-0b74740d1c86
 	github.com/microcosm-cc/bluemonday v1.0.27
-	github.com/onsi/ginkgo/v2 v2.27.2
+	github.com/onsi/ginkgo/v2 v2.27.4
 	github.com/onsi/gomega v1.38.2
 	github.com/rs/xid v1.6.0
 	github.com/rs/zerolog v1.34.0
