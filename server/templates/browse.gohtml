@@ -1,0 +1,96 @@
+{{template "header" .}}
+
+{{ $authenticated := .Authenticated }}
+{{ $login_url := .LoginURL }}
+{{ $logout_url := .LogoutURL }}
+
+{{ $user_name := .UserName }}
+{{ $user_email := .UserEmail }}
+
+{{ $auth_form_state := "disabled" }}
+{{ if .AuthAvailable }}
+    {{ $auth_form_state = "" }}
+{{ end }}
+
+<div class="container">
+    <div class="top-left-cell"><a href="/browse"><img src="/static/favicon-32x32.png" alt="Sqyrrl"></a></div>
+
+    <div class="top-cell">
+        <h3>
+        {{ if $authenticated }}
+            {{ $user_name }} &lt;{{ $user_email }}&gt;
+        {{ else }}
+            Not logged in
+        {{ end }}
+        </h3>
+    </div>
+
+    <div class="top-right-cell">
+        {{ if $authenticated }}
+            <form method="post"  action="{{ $logout_url }}">
+                <button id="logout-button" type="submit" {{$auth_form_state}}>Logout</button>
+            </form>
+        {{ else }}
+            <form method="post" action="{{ $login_url }}">
+                <button id="login-button" type="submit" {{$auth_form_state}}>Login</button>
+            </form>
+        {{ end }}
+    </div>
+
+    <div class="main-cell">
+        <hr/>
+        <h4>Browsing {{ .CurrentPath }}</h4>
+
+        <div class="breadcrumbs">
+            {{ if .ParentPath }}
+                <a href="{{ .ParentPath }}">..</a>
+            {{ end }}
+            {{ range $index, $crumb := .Breadcrumbs }}
+                {{ if $index }} / {{ end }}
+                <a href="{{ $crumb.Link }}">{{ $crumb.Name }}</a>
+            {{ end }}
+        </div>
+
+        <div class="url-grid">
+            <div class="url-cell"><strong>Name</strong></div>
+            <div class="info-cell"><strong>Size</strong></div>
+            <div class="acl-cell"><strong>ACL</strong></div>
+            <div class="metadata-cell"><strong>Metadata</strong></div>
+            {{ range $entry := .Entries }}
+                <div class="url-cell"><a href="{{ $entry.Link }}">{{ $entry.DisplayName }}</a></div>
+                <div class="info-cell">
+                    {{ if $entry.SizeNumber }}
+                        <div class="info-item">
+                            <span class="size-number">{{ $entry.SizeNumber }}</span>
+                            <span class="size-unit">{{ $entry.SizeUnit }}</span>
+                        </div>
+                    {{ end }}
+                </div>
+                <div class="acl-cell">
+                    {{ with $entry.FilteredACLStrings }}
+                        {{ if . }}
+                            <div class="acl-bag">
+                                {{ range $av := . }}
+                                    <div class="acl-item">{{ $av }}</div>
+                                {{ end }}
+                            </div>
+                        {{ end }}
+                    {{ end }}
+                </div>
+                <div class="metadata-cell">
+                    {{ with $entry.FilteredMetadataStrings }}
+                        {{ if . }}
+                            <div class="metadata-bag">
+                                {{ range $av := . }}
+                                    <div class="metadata-item">{{ $av }}</div>
+                                {{ end }}
+                            </div>
+                        {{ end }}
+                    {{ end }}
+                </div>
+            {{ end }}
+        </div>
+    </div>
+</div>
+
+{{template "footer"}}

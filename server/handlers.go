@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024. Genome Research Ltd. All rights reserved.
+ * Copyright (C) 2024, 2026. Genome Research Ltd. All rights reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -142,7 +142,7 @@ func RedirectToIdentityServer(w http.ResponseWriter, r *http.Request, server *Sq
 		return
 	}
 	server.sessionManager.Put(r.Context(), SessionKeyState, state)
-	// store where to send the user after login
+	// Store where to send the user after login
 	server.sessionManager.Put(r.Context(), RedirectURIState, redirectUri)
 
 	authURL := server.oauth2Config.AuthCodeURL(state)
@@ -421,6 +421,154 @@ func HandleIRODSGet(server *SqyrrlServer) http.Handler {
 	})
 }
 
+func HandleIRODSBrowse(server *SqyrrlServer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger := server.logger
+		logger.Trace().Msg("iRODS browse handler called")
+
+		var corrID string
+		if val := r.Context().Value(correlationIDKey); val != nil {
+			corrID = val.(string)
+		}
+		corrLogger := logger.With().
+			Str("correlation_id", corrID).
+			Str("irods", "browse").Logger()
+
+		decodedPath, err := url.PathUnescape(r.URL.Path)
+		if err != nil {
+			corrLogger.Err(err).
+				Str("path", r.URL.Path).
+				Msg("Failed to decode request path")
+			writeErrorResponse(corrLogger, w, http.StatusBadRequest)
+			return
+		}
+
+		objPath := path.Clean(path.Join("/", decodedPath))
+
+		pathLogger := corrLogger.With().Str("path", objPath).Logger()
+		pathLogger.Debug().Msg("Browsing iRODS collection")
+
+		var rodsFs *ifs.FileSystem
+		if rodsFs, err = ifs.NewFileSystemWithDefault(server.iRODSAccount, AppName); err != nil {
+			pathLogger.Err(err).Msg("Failed to create an iRODS file system")
+			writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
+			return
+		}
+		defer rodsFs.Release()
+
+		var statEntry *ifs.Entry
+		if statEntry, err = rodsFs.Stat(objPath); err != nil {
+			if types.IsAuthError(err) {
+				pathLogger.Err(err).Msg("Failed to authenticate with iRODS")
+				writeErrorResponse(pathLogger, w, http.StatusUnauthorized)
+				return
+			}
+			if types.IsFileNotFoundError(err) {
+				pathLogger.Info().Msg("Requested path does not exist")
+				writeErrorResponse(pathLogger, w, http.StatusNotFound)
+				return
+			}
+			pathLogger.Err(err).Msg("Failed to stat file")
+			writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
+			return
+		}
+
+		if !statEntry.IsDir() {
+			redirect := buildIRODSURL(objPath)
+			pathLogger.Debug().Str("redirect", redirect).Msg("Redirecting to data object download")
+			http.Redirect(w, r, redirect, http.StatusFound)
+			return
+		}
+
+		entries, err := rodsFs.List(objPath)
+		if err != nil {
+			pathLogger.Err(err).Msg("Failed to list collection entries")
+			writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
+			return
+		}
+
+		browseEntries := make([]BrowseEntry, 0, len(entries))
+		for _, entry := range entries {
+			if entry.Path == "/" {
+				continue
+			}
+			metadata, err := rodsFs.ListMetadata(entry.Path)
+			if err != nil {
+				pathLogger.Err(err).Str("entry", entry.Path).
+					Msg("Failed to list metadata for entry")
+				writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
+				return
+			}
+
+			acl, err := rodsFs.ListACLs(entry.Path)
+			if err != nil {
+				pathLogger.Err(err).Str("entry", entry.Path).
+					Msg("Failed to list ACLs for entry")
+				writeErrorResponse(pathLogger, w, http.StatusInternalServerError)
+				return
+			}
+
+			link := buildIRODSURL(entry.Path)
+			if entry.IsDir() {
+				link = buildBrowseURL(entry.Path)
+			}
+
+			browseEntries = append(browseEntries, BrowseEntry{
+				Path:         entry.Path,
+				Name:         entry.Name,
+				Size:         entry.Size,
+				IsCollection: entry.IsDir(),
+				Metadata:     metadata,
+				ACL:          acl,
+				Link:         link,
+			})
+		}
+
+		sortBrowseEntries(browseEntries)
+
+		parentPath := ""
+		zoneRoot := zoneRootPath(objPath)
+		if objPath != zoneRoot && objPath != "/" {
+			parentPath = buildBrowseURL(path.Dir(objPath))
+		}
+
+		type pageData struct {
+			LoginURL      string
+			LogoutURL     string
+			AuthAvailable bool
+			Authenticated bool
+			UserName      string
+			UserEmail     string
+			Version       string
+			CurrentPath   string
+			ParentPath    string
+			Breadcrumbs   []Breadcrumb
+			Entries       []BrowseEntry
+		}
+
+		data := pageData{
+			LoginURL:      EndpointLogin,
+			LogoutURL:     EndpointLogout,
+			AuthAvailable: server.sqyrrlConfig.EnableOIDC,
+			Authenticated: server.isAuthenticated(r),
+			UserName:      server.getSessionUserName(r),
+			UserEmail:     server.getSessionUserEmail(r),
+			Version:       Version,
+			CurrentPath:   objPath,
+			ParentPath:    parentPath,
+			Breadcrumbs:   buildBreadcrumbs(objPath),
+			Entries:       browseEntries,
+		}
+
+		tplName := "browse.gohtml"
+		if err := templates.ExecuteTemplate(w, tplName, data); err != nil {
+			pathLogger.Err(err).
+				Str("tplName", tplName).
+				Msg("Failed to execute HTML template")
+		}
+	})
+}
+
 // AddRequestLogger adds an HTTP request suiteLogger to the handler chain.
 //
 // If a correlation ID is present in the request context, it is logged.
@@ -496,9 +644,9 @@ func SanitiseRequestURL(server *SqyrrlServer) HandlerChain {
 					Msg("Path was sanitised")
 			}
 
-			url := r.URL
-			url.Path = sanPath
-			r.URL = url
+			u := r.URL
+			u.Path = sanPath
+			r.URL = u
 
 			next.ServeHTTP(w, r)
 		})
