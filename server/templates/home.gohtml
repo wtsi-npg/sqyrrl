@@ -16,7 +16,7 @@
 {{ end }}
 
 <div class="container">
-    <div class="top-left-cell"><img src="/static/favicon-32x32.png" alt="Sqyrrl"></div>
+    <div class="top-left-cell"><a href="/browse"><img src="/static/favicon-32x32.png" alt="Sqyrrl"></a></div>
 
     <div class="top-cell">
         <h3>
@@ -53,25 +53,34 @@
                     {{ range $citem := $citems }}
                         <div class="url-cell"><a href="{{ $citem.Path }}">{{ $citem.Path }}</a></div>
                         <div class="info-cell">
-                            <div class="info-item">{{ $citem.SizeString }}</div>
+                            {{ if $citem.SizeNumber }}
+                                <div class="info-item">
+                                    <span class="size-number">{{ $citem.SizeNumber }}</span>
+                                    <span class="size-unit">{{ $citem.SizeUnit }}</span>
+                                </div>
+                            {{ end }}
                         </div>
                         <div class="acl-cell">
-                            <div class="acl-bag">
-                                {{ with $citem }}
-                                    {{ range $av := .FilteredACLStrings }}
-                                        <div class="acl-item">{{ $av }}</div>
-                                    {{ end }}
+                            {{ with $citem.FilteredACLStrings }}
+                                {{ if . }}
+                                    <div class="acl-bag">
+                                        {{ range $av := . }}
+                                            <div class="acl-item">{{ $av }}</div>
+                                        {{ end }}
+                                    </div>
                                 {{ end }}
-                            </div>
+                            {{ end }}
                         </div>
                         <div class="metadata-cell">
-                            <div class="metadata-bag">
-                                {{ with $citem }}
-                                    {{ range $av := .FilteredMetadataStrings }}
-                                        <div class="metadata-item">{{ $av }}</div>
-                                    {{ end }}
+                            {{ with $citem.FilteredMetadataStrings }}
+                                {{ if . }}
+                                    <div class="metadata-bag">
+                                        {{ range $av := . }}
+                                            <div class="metadata-item">{{ $av }}</div>
+                                        {{ end }}
+                                    </div>
                                 {{ end }}
-                            </div>
+                            {{ end }}
                         </div>
 
                     {{ end }}
@@ -87,7 +96,12 @@
             {{ range $citem := $citems }}
                 <div class="url-cell"><a href="{{ $citem.Path }}">{{ $citem.Path }}</a></div>
                 <div class="info-cell">
-                    <div class="info-item">{{ $citem.SizeString }}</div>
+                    {{ if $citem.SizeNumber }}
+                        <div class="info-item">
+                            <span class="size-number">{{ $citem.SizeNumber }}</span>
+                            <span class="size-unit">{{ $citem.SizeUnit }}</span>
+                        </div>
+                    {{ end }}
                 </div>
                 <div class="acl-cell">
                     <div class="acl-bag">
@@ -99,13 +113,15 @@
                     </div>
                 </div>
                 <div class="metadata-cell">
-                    <div class="metadata-bag">
-                        {{ with $citem }}
-                            {{ range $av := .FilteredMetadataStrings }}
-                                <div class="metadata-item">{{ $av }}</div>
-                            {{ end }}
+                    {{ with $citem.FilteredMetadataStrings }}
+                        {{ if . }}
+                            <div class="metadata-bag">
+                                {{ range $av := . }}
+                                    <div class="metadata-item">{{ $av }}</div>
+                                {{ end }}
+                            </div>
                         {{ end }}
-                    </div>
+                    {{ end }}
                 </div>
 
             {{ end }}

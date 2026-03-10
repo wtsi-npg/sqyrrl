@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024. Genome Research Ltd. All rights reserved.
+ * Copyright (C) 2024, 2026. Genome Research Ltd. All rights reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,6 +35,7 @@ const (
 	EndpointLogout       = EndpointAPI + "logout/"
 	EndpointAuthCallback = EndpointAPI + "auth-callback/"
 	EndpointIRODS        = EndpointAPI + "irods/"
+	EndpointBrowse       = EndpointRoot + "browse/"
 )
 
 func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
@@ -46,6 +47,7 @@ func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 
 	getStatic := http.StripPrefix(EndpointStatic, HandleStaticContent(server))
 	getObject := http.StripPrefix(EndpointIRODS, HandleIRODSGet(server))
+	getBrowse := http.StripPrefix(EndpointBrowse, HandleIRODSBrowse(server))
 
 	// See the home page template for the login/logout button that POSTs to these endpoints
 	loginHandler := sm.LoadAndSave(correlate(logRequest(HandleLogin(server))))
@@ -65,6 +67,10 @@ func (server *SqyrrlServer) addRoutes(mux *http.ServeMux) {
 	// The API endpoint used to access files in iRODS
 	irodsGetHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(getObject))))
 	server.AddRoute(mux, "GET", EndpointIRODS, irodsGetHandler)
+
+	// The browse endpoint used to navigate collections in iRODS
+	browseHandler := sm.LoadAndSave(sanitiseURL(correlate(logRequest(getBrowse))))
+	server.AddRoute(mux, "GET", EndpointBrowse, browseHandler)
 
 	// The root endpoint hosts a home page. Any requests relative to it are redirected
 	// to the iRODS API endpoint

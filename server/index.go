@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2024, 2025. Genome Research Ltd. All rights reserved.
+ * Copyright (C) 2024, 2025, 2026. Genome Research Ltd. All rights
+ * reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -158,22 +159,33 @@ func (item *Item) Category() string {
 	return category
 }
 
-// SizeString returns a human-readable string representing the size of the in iRODS.
-func (item *Item) SizeString() string {
-	size := float64(item.Size)
+// SizeNumber returns the numeric part of a human-readable size string.
+func (item *Item) SizeNumber() string {
+	number, _ := sizeParts(item.Size)
+	return number
+}
+
+// SizeUnit returns the units part of a human-readable size string.
+func (item *Item) SizeUnit() string {
+	_, unit := sizeParts(item.Size)
+	return unit
+}
+
+func sizeParts(size int64) (string, string) {
+	sizeFloat := float64(size)
 	kib := float64(1024)
 	mib := 1024 * kib
 	gib := 1024 * mib
 
 	switch {
-	case size < kib:
-		return fmt.Sprintf("%.0f B", size)
-	case size < mib:
-		return fmt.Sprintf("%.2f KiB", size/kib)
-	case size < gib:
-		return fmt.Sprintf("%.2f MiB", size/mib)
+	case sizeFloat < kib:
+		return fmt.Sprintf("%.0f", sizeFloat), "B"
+	case sizeFloat < mib:
+		return fmt.Sprintf("%.2f", sizeFloat/kib), "KiB"
+	case sizeFloat < gib:
+		return fmt.Sprintf("%.2f", sizeFloat/mib), "MiB"
 	default:
-		return fmt.Sprintf("%.2f GiB", size/gib)
+		return fmt.Sprintf("%.2f", sizeFloat/gib), "GiB"
 	}
 }
 
@@ -201,7 +213,7 @@ func (item *Item) MetadataStrings(filter ...func(types.IRODSMeta) bool) []string
 }
 
 // ACLStrings returns a sorted list of strings representing the ACL of the item. The ACL
-// is filtered by the given functions, which are applied to each access item. If a 
+// is filtered by the given functions, which are applied to each access item. If a
 // function returns true, the access item is excluded from the result.
 func (item *Item) ACLStrings(filter ...func(types.IRODSAccess) bool) []string {
 	acl := make([]string, 0, len(item.ACL))

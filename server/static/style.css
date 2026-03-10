@@ -100,8 +100,22 @@ body {
 .info-item {
     padding: 0.4rem;
     border-radius: calc(0.5rem);
-    text-align: center;
+    display: inline-grid;
+    grid-auto-flow: column;
+    column-gap: 0.25rem;
+    align-items: baseline;
     background-color: var(--default-inf-item-background-color);
+}
+
+.size-number {
+    font-family: monospace;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.size-unit {
+    font-family: monospace;
+    text-align: left;
 }
 
 .acl-bag {
@@ -135,4 +149,18 @@ body {
     text-align: center;
     font-size-adjust: 0.5;
     background-color: var(--default-met-item-background-color);
+}
+
+.breadcrumbs {
+    margin: 0.5rem 0 1rem;
+    font-size: smaller;
+}
+
+.breadcrumbs a {
+    color: var(--copy);
+    text-decoration: none;
+}
+
+.breadcrumbs a:hover {
+    text-decoration: underline;
 }
