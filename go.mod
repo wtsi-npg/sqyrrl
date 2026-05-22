@@ -9,7 +9,7 @@ require (
 	github.com/cyverse/go-irodsclient v0.15.7-0.20241106203458-0b74740d1c86
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/onsi/ginkgo/v2 v2.28.1
-	github.com/onsi/gomega v1.39.1
+	github.com/onsi/gomega v1.40.0
 	github.com/rs/xid v1.6.0
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
