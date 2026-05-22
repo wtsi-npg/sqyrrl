@@ -11,7 +11,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.40.0
 	github.com/rs/xid v1.6.0
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/term v0.40.0
