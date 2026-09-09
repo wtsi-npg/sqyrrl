@@ -8,7 +8,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/cyverse/go-irodsclient v0.15.7-0.20241106203458-0b74740d1c86
 	github.com/microcosm-cc/bluemonday v1.0.27
-	github.com/onsi/ginkgo/v2 v2.28.1
+	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.40.0
 	github.com/rs/xid v1.6.0
 	github.com/rs/zerolog v1.35.1
@@ -32,7 +32,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/pprof v0.0.0-20260115054156-294ebfa9ad83 // indirect
+	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
